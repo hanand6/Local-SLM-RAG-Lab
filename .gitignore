@@ -1,0 +1,17 @@
+# API keys — never commit these
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Data & uploads
+uploads/
+data/
+reports/
+
+# ChromaDB local store
+chroma_db/
