@@ -74,6 +74,52 @@ The app opens at `http://localhost:8501`. The first time you index a document it
 
 ---
 
+## Using the 🎓 Learn tab
+
+### 1. Check the app is ready
+
+Open the **⚙️ Setup** tab. You should see **"OPENROUTER_API_KEY is set"**, and the sidebar should show **OpenRouter: 🟢 Key set**. If not, check `.env` and restart the app. Ollama is optional, so a "not running" status is fine.
+
+### 2. Index a document
+
+Most labs run on your own document, so index one first:
+
+1. Open **📄 Upload & Index**.
+2. Drop in a file, or use the included sample: [`samples/acme_annual_report_2025.md`](samples/acme_annual_report_2025.md). It's a fictional annual report with numbers, risks and recommendations, which suits every lab.
+3. Click **📥 Index …** and wait for **"You're ready for the next step"**. The first run takes about 20s while the embedding model loads.
+
+Use non-sensitive documents: retrieved chunks are sent to the free cloud models.
+
+### 3. Work through a chapter
+
+1. Open **🎓 Learn** and pick a chapter on the left. They build on each other, so start with chapter 1.
+2. **📖 Concept:** read it first (about 5 minutes).
+3. **🧪 Lab:** each lab says how many model calls it makes before you run it.
+4. **🎤 Interview:** write your answer in the box (or say it out loud) *before* clicking **Reveal**.
+5. Tick **Mark this chapter complete**.
+
+### What each lab needs
+
+| Chapter | Needs an indexed document? | Model calls per run |
+|---|---|---|
+| 1. Prompting vs RAG vs fine-tuning | Yes | 3 |
+| 2. Hallucination and grounding | Yes | 1–2 |
+| 3. Evals | Lab A: yes · Lab B: no | A: 2 per question (max 10) · B: 0 |
+| 4. Latency and cost | Labs A–C: yes · Lab D: no | A: 1 · B: 0–1 · C: 2 · D: 0 |
+| 5. Agents and safeguards | Lab A: yes · Labs B–C: no | A: up to 7 · B, C: 0 |
+| 6. Classic ML literacy | No | B: 1 (rules and ML run locally) · A, C: 0 |
+| 7. AI system design | No | B: 0–1 (the critique is optional) |
+| 8. Launches and responsible AI | No | B: 2–8 · A, C: 0 |
+
+### Tips
+
+- **Models:** labs offer only the models ticked in the sidebar. Flint v1.0 and Nemotron 3.5 Lightning are fast and reliable defaults. Gemma 4 26B is often rate-limited.
+- **Rate limits:** free models allow roughly 20 calls a minute. The call counter on the left of the Learn tab tracks your session. If you hit a limit, wait a minute; calls are retried automatically.
+- **Good questions for the sample report:** *"What does the board recommend for 2026?"* (answerable), *"What was revenue in 1995?"* (unanswerable, good for chapter 2: it still scores about 0.41 similarity, so raise the abstain threshold to 0.45 to see the gate refuse it), *"How much did logistics costs grow?"* (a number, good for chapter 3's golden set).
+- **Progress and lab results** are kept for the browser session only. A page refresh or app restart clears them, along with the index, so re-index after restarting.
+
+---
+
 ## Choosing models
 
 The default free models live in `config.py`. Free models are renamed or removed often, so:
@@ -151,6 +197,7 @@ local-slm-rag/
 ├── comparator.py       ← Multi-model comparison + tradeoff scoring
 ├── ragas_evaluator.py  ← RAGAS evaluation with selectable judge LLMs
 ├── learn/              ← 🎓 Learn tab: ui.py + one module per chapter
+├── samples/            ← Fictional sample document for the labs
 ├── requirements.txt
 └── .env.example        ← Template for API keys and model overrides
 ```
