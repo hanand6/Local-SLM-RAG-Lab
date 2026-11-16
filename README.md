@@ -20,6 +20,24 @@ Local Ollama models are still supported as an option.
 | Benchmarking | P50/P95 latency, tokens/sec, TTFT |
 | Retrieval | Vector search, optional BM25 reranking side by side |
 | Evaluation | RAGAS (faithfulness, answer relevancy, context precision, …) with an LLM judge |
+| 🎓 Learn | Guided chapters for AI PM interview topics: concept → hands-on lab on your document → interview card |
+
+---
+
+## 🎓 Learn chapters
+
+Each chapter has three parts:
+- **Concept:** a short read.
+- **Lab:** runs on your own indexed document and shows how many model calls it will make.
+- **Interview:** practise a committed answer, then reveal a model answer with pitfalls.
+
+| # | Chapter | Lab |
+|---|---|---|
+| 1 | Prompting vs RAG vs fine-tuning | Same question three ways (prompt only / whole document / RAG), plus a decision drill |
+| 2 | Hallucination and grounding | Strict vs loose prompt, abstention threshold, citation and support checks |
+| 3 | Evals | Golden set + LLM-as-judge vs your own grades; cost-based threshold simulator |
+
+Coming later: latency and cost, agents and safeguards, classic ML literacy, AI system design, launches and responsible AI.
 
 ---
 
@@ -75,7 +93,7 @@ Keep benchmark and eval runs small: the Benchmark tab shows how many calls a run
 
 ### Reasoning models
 
-Some free models "think" before answering (for example LFM-3, North Mini Code and Flint). That thinking counts as output tokens, so the app gives each answer a 2,048-token budget (`API_MAX_OUTPUT_TOKENS`). Results report reasoning tokens separately, plus the time until the first visible word of the answer.
+Some free models "think" before answering (for example LFM-3, Nemotron, North Mini Code and Flint). That thinking counts as output tokens, so the app gives each answer a 4,096-token budget (`API_MAX_OUTPUT_TOKENS`). If a model still returns an empty answer, the app retries once with double the budget and low reasoning effort. Results report reasoning tokens separately, plus the time until the first visible word of the answer.
 
 ---
 
@@ -127,6 +145,7 @@ local-slm-rag/
 ├── benchmarker.py      ← Latency / TPS / TTFT metrics
 ├── comparator.py       ← Multi-model comparison + tradeoff scoring
 ├── ragas_evaluator.py  ← RAGAS evaluation with selectable judge LLMs
+├── learn/              ← 🎓 Learn tab: ui.py + one module per chapter
 ├── requirements.txt
 └── .env.example        ← Template for API keys and model overrides
 ```

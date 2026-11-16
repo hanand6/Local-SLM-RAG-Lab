@@ -217,8 +217,11 @@ API_BACKOFF_BASE_S = 4.0     # 4s, 8s, 16s ...
 API_BACKOFF_MAX_S = 30.0
 API_TIMEOUT_S = 120.0        # per attempt; free-tier queues can be slow
 # Output budget per answer. Reasoning ("thinking") models spend part of this
-# on hidden reasoning before the visible answer, so keep it generous.
-API_MAX_OUTPUT_TOKENS = 2048
+# on hidden reasoning before the visible answer (Nemotron 3.5 Lightning used
+# up to ~1,000 tokens thinking on short RAG prompts), so keep it generous.
+# If an answer still comes back empty, the client retries once with double
+# this budget and low reasoning effort.
+API_MAX_OUTPUT_TOKENS = 4096
 
 # ── RAGAS judge pacing ───────────────────────────────────────
 # RAGAS defaults to 16 parallel judge calls — far above free-tier limits.

@@ -92,6 +92,7 @@ class OpenAICompatClient:
             api_key=api_key, base_url=base_url,
             max_retries=0, timeout=API_TIMEOUT_S,
         )
+        self._base_url = base_url
 
     def generate(
         self,
@@ -101,31 +102,61 @@ class OpenAICompatClient:
         max_tokens: int = API_MAX_OUTPUT_TOKENS,
         run_index: int = 0,
     ) -> BenchmarkResult:
-        """Call the API (with retries) and return a BenchmarkResult with timing."""
+        """
+        Call the API (with rate-limit retries) and return a BenchmarkResult.
+
+        Reasoning models sometimes spend their whole output budget thinking and
+        return no visible answer. When that happens we retry once with double
+        the budget and (on OpenRouter) low reasoning effort.
+        """
         result = BenchmarkResult(
             model=self.model,
             run_index=run_index,
             prompt_preview=prompt[:120],
         )
 
+        self._generate_with_retries(result, prompt, system, temperature, max_tokens)
+        if result.error or result.response.strip():
+            return result
+
+        # ── Empty answer: one recovery attempt ──
+        first_reasoning = result.reasoning_tokens
+        retry_budget = max_tokens * 2
+        extra = {"reasoning": {"effort": "low"}} if "openrouter.ai" in self._base_url else None
+        self._generate_with_retries(result, prompt, system, temperature, retry_budget, extra)
+        result.empty_answer_retry = True
+        if result.error or result.response.strip():
+            return result
+
+        result.error = (
+            f"Empty answer from '{self.model}', even after a retry with a "
+            f"{retry_budget}-token budget and low reasoning effort "
+            f"(it used {max(first_reasoning, result.reasoning_tokens)} tokens thinking). "
+            "This model struggles with this prompt — try another model, or raise "
+            "API_MAX_OUTPUT_TOKENS in config.py."
+            if first_reasoning or result.reasoning_tokens or result.finish_reason == "length"
+            else f"Empty answer from '{self.model}' (twice). The provider returned no "
+            "text; try again later or pick another model."
+        )
+        return result
+
+    def _generate_with_retries(
+        self,
+        result: BenchmarkResult,
+        prompt: str,
+        system: str,
+        temperature: float,
+        max_tokens: int,
+        extra_body: Optional[dict] = None,
+    ) -> None:
+        """Retry on 429/5xx with exponential backoff. Sets result.error on failure."""
         last_exc: Optional[Exception] = None
         for attempt in range(API_MAX_RETRIES + 1):
             try:
-                self._generate_once(result, prompt, system, temperature, max_tokens)
+                self._generate_once(result, prompt, system, temperature, max_tokens, extra_body)
                 result.error = ""
-                result.retries = attempt
-                if not result.response.strip():
-                    result.error = (
-                        f"Empty answer from '{self.model}'. "
-                        + (
-                            f"It is a reasoning model and spent all {max_tokens} output "
-                            "tokens thinking. Raise API_MAX_OUTPUT_TOKENS in config.py "
-                            "or pick another model."
-                            if result.reasoning_tokens or result.finish_reason == "length"
-                            else "The provider returned no text; try again or pick another model."
-                        )
-                    )
-                return result
+                result.retries += attempt
+                return
             except Exception as e:
                 last_exc = e
                 code = _status_code(e)
@@ -135,8 +166,7 @@ class OpenAICompatClient:
                 time.sleep(min(wait, API_BACKOFF_MAX_S))
 
         result.error = friendly_api_error(last_exc, self.model)
-        result.retries = attempt
-        return result
+        result.retries += attempt
 
     def _generate_once(
         self,
@@ -145,6 +175,7 @@ class OpenAICompatClient:
         system: str,
         temperature: float,
         max_tokens: int,
+        extra_body: Optional[dict] = None,
     ) -> None:
         messages = []
         if system:
@@ -166,6 +197,7 @@ class OpenAICompatClient:
             max_tokens=max_tokens,
             stream=True,
             stream_options={"include_usage": True},
+            **({"extra_body": extra_body} if extra_body else {}),
         )
 
         for chunk in stream:

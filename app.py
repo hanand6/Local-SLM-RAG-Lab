@@ -25,6 +25,7 @@ from config import (
     OPENROUTER_API_KEY, EMBEDDING_MODEL,
 )
 from api_client import list_openrouter_free_models
+from learn.ui import render_learn
 from embedder import EMBEDDING_OPTIONS
 from ollama_client import OllamaClient
 from rag_engine import RAGEngine
@@ -229,10 +230,11 @@ with st.sidebar:
 st.title("🧠 SLM RAG Lab")
 st.caption("Document Q&A · Model Comparison · Benchmarking · Evaluation")
 
-tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+tab1, tab2, tab3, tab_learn, tab4, tab5, tab6, tab7 = st.tabs([
     "⚙️ Setup",
     "📄 Upload & Index",
     "💬 Ask",
+    "🎓 Learn",
     "⚖️ Compare",
     "📊 Benchmark",
     "📈 Tradeoff Report",
@@ -397,55 +399,95 @@ with tab2:
 
     col1, col2 = st.columns([2, 1])
     with col1:
+        st.markdown("**Step 1 — Choose files**")
         uploaded = st.file_uploader(
             "Drop documents here",
             type=["pdf", "txt", "md", "docx"],
             accept_multiple_files=True,
         )
 
+        indexed_names = {d["doc_name"] for d in rag.indexed_docs}
         if uploaded:
+            pending = [uf for uf in uploaded if uf.name not in indexed_names]
+            already = [uf.name for uf in uploaded if uf.name in indexed_names]
+
+            st.markdown("**Step 2 — Index them**")
             for uf in uploaded:
-                with st.expander(f"📄 {uf.name}", expanded=True):
-                    if st.button(f"Index {uf.name}", key=f"idx_{uf.name}"):
-                        # Save temp file
-                        suffix = Path(uf.name).suffix
-                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                            tmp.write(uf.getbuffer())
-                            tmp_path = tmp.name
+                size_mb = uf.size / 1_000_000
+                state = "✅ indexed" if uf.name in indexed_names else "⏳ ready to index"
+                st.markdown(f"📄 `{uf.name}` · {size_mb:.1f} MB · {state}")
 
-                        with st.spinner(f"Embedding {uf.name} with {rag.embedding_model} (first run downloads the model)..."):
-                            bar = st.progress(0.0, text="Chunking...")
+            if pending:
+                label = (
+                    f"📥 Index {pending[0].name}" if len(pending) == 1
+                    else f"📥 Index {len(pending)} documents"
+                )
+                if st.button(label, type="primary", use_container_width=True, key="index_uploads"):
+                    ok, failed = [], []
+                    for i, uf in enumerate(pending, start=1):
+                        bar = st.progress(0.0, text=f"[{i}/{len(pending)}] {uf.name}: reading and chunking...")
 
-                            def _progress(done, total, _bar=bar, _t0=time.perf_counter()):
-                                elapsed = time.perf_counter() - _t0
-                                eta = elapsed / done * (total - done) if done else 0
-                                _bar.progress(
-                                    done / total,
-                                    text=f"Embedded {done:,}/{total:,} chunks · ~{eta:.0f}s left",
-                                )
+                        def _progress(done, total, _bar=bar, _name=uf.name, _i=i, _t0=time.perf_counter()):
+                            elapsed = time.perf_counter() - _t0
+                            eta = elapsed / done * (total - done) if done else 0
+                            _bar.progress(
+                                done / total,
+                                text=f"[{_i}/{len(pending)}] {_name}: embedded {done:,}/{total:,} chunks · ~{eta:.0f}s left",
+                            )
 
+                        # Save under the original name so citations show it.
+                        with tempfile.TemporaryDirectory() as tmp_dir:
+                            tmp_path = Path(tmp_dir) / Path(uf.name).name
+                            tmp_path.write_bytes(uf.getbuffer())
                             try:
-                                stats = rag.index_file(tmp_path, progress_cb=_progress)
-                                bar.empty()
-                                st.success(
-                                    f"✅ Indexed {stats['chunks']} chunks "
-                                    f"in {stats['index_time_s']}s — "
-                                    f"{stats['char_count']:,} chars"
-                                )
+                                stats = rag.index_file(str(tmp_path), progress_cb=_progress)
+                                ok.append(stats)
                             except Exception as e:
-                                st.error(f"Error: {e}")
-                            finally:
-                                os.unlink(tmp_path)
+                                failed.append((uf.name, str(e)))
+                        bar.empty()
+
+                    st.session_state.index_flash = {"ok": ok, "failed": failed}
+                    st.rerun()
+            elif already:
+                st.caption("All selected files are already indexed.")
+
+        # ── Result of the last indexing run + next step ─────────
+        flash = st.session_state.pop("index_flash", None)
+        if flash:
+            for s in flash["ok"]:
+                st.success(
+                    f"✅ **{s['doc_name']}** — {s['chunks']:,} chunks · "
+                    f"{s['char_count']:,} chars · {s['index_time_s']}s"
+                )
+            for name, err in flash["failed"]:
+                st.error(f"❌ **{name}** — {err}")
+            if not flash["ok"] and not flash["failed"]:
+                st.warning("Nothing was indexed.")
+            if flash["ok"] and any(s["chunks"] == 0 for s in flash["ok"]):
+                st.warning(
+                    "Some documents produced 0 chunks — likely a scanned PDF with no "
+                    "text layer. Those can't be searched."
+                )
+
+        if rag.chunk_count > 0:
+            st.info(
+                f"**You're ready for the next step.** {len(rag.indexed_docs)} document(s) · "
+                f"{rag.chunk_count:,} chunks indexed.\n\n"
+                "➡️ Open the **💬 Ask** tab above to ask a question, "
+                "**🎓 Learn** for guided chapters, or **⚖️ Compare** to try several models side by side.",
+                icon="🎉",
+            )
 
         st.divider()
         st.subheader("Or paste text directly")
         pasted = st.text_area("Paste document content here", height=150)
         paste_name = st.text_input("Document name (for citation)", value="pasted_doc")
-        if st.button("Index pasted text") and pasted.strip():
+        if st.button("📥 Index pasted text", disabled=not pasted.strip()):
             with st.spinner("Indexing..."):
                 try:
                     stats = rag.index_text(pasted, doc_name=paste_name)
-                    st.success(f"✅ {stats['chunks']} chunks indexed")
+                    st.session_state.index_flash = {"ok": [stats], "failed": []}
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error: {e}")
 
@@ -552,6 +594,13 @@ with tab2:
 | Similarity | {sim_labels.get(rag.similarity, rag.similarity)} |
 | Vector store | ChromaDB (local) |
         """)
+
+
+# ════════════════════════════════════════════════════════════
+# LEARN — chapters with concept, lab and interview card
+# ════════════════════════════════════════════════════════════
+with tab_learn:
+    render_learn(rag)
 
 
 # ════════════════════════════════════════════════════════════

@@ -549,6 +549,28 @@ class RAGEngine:
 
         return vector_result, bm25_result
 
+    def get_all_text(self, max_chars: int) -> tuple[str, int]:
+        """
+        Reassemble indexed documents in reading order (for "long-context"
+        comparisons). Returns (text, total_chars_available) — text is cut
+        at max_chars. Chunk overlap means a little text repeats.
+        """
+        if self._collection.count() == 0:
+            return "", 0
+        data = self._collection.get(include=["documents", "metadatas"])
+        rows = sorted(
+            zip(data["metadatas"], data["documents"]),
+            key=lambda r: (r[0].get("source", ""), r[0].get("chunk_idx", 0)),
+        )
+        parts, current = [], None
+        for meta, doc in rows:
+            if meta.get("source") != current:
+                current = meta.get("source")
+                parts.append(f"\n\n===== {current} =====\n")
+            parts.append(doc)
+        full = "\n".join(parts).strip()
+        return full[:max_chars], len(full)
+
     # ── Stats ────────────────────────────────────────────────
 
     @property

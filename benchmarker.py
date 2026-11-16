@@ -58,6 +58,8 @@ class BenchmarkResult:
     # Time until the first visible answer token (after any reasoning)
     time_to_answer_ms: float = 0.0
     finish_reason: str = ""
+    # True if the first answer was empty and we retried with a bigger budget
+    empty_answer_retry: bool = False
 
     def to_dict(self) -> dict:
         return asdict(self)
