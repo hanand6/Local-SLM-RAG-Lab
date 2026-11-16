@@ -369,8 +369,10 @@ class RAGEngine:
         system: str,
         prompt: str,
         run_index: int = 0,
+        on_token=None,
     ) -> BenchmarkResult:
-        """Route cloud models to the appropriate API client."""
+        """Route cloud models to the appropriate API client.
+        on_token(text_so_far) streams the answer (OpenAI-compatible backends)."""
         from api_client import OpenAICompatClient, NvidiaApiClient, GeminiApiClient
         backend = MODELS.get(model, {}).get("backend", "ollama")
 
@@ -387,7 +389,7 @@ class RAGEngine:
                 base_url=OPENROUTER_BASE_URL,
                 model=model,
             )
-            return client.generate(prompt, system=system, run_index=run_index)
+            return client.generate(prompt, system=system, run_index=run_index, on_token=on_token)
 
         elif backend == "nvidia_nim":
             if not NVIDIA_API_KEY:
@@ -399,7 +401,7 @@ class RAGEngine:
                 base_url=NVIDIA_BASE_URL,
                 model=model,
             )
-            return client.generate(prompt, system=system, run_index=run_index)
+            return client.generate(prompt, system=system, run_index=run_index, on_token=on_token)
 
         elif backend == "gemini":
             if not GEMINI_API_KEY:

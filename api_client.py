@@ -101,6 +101,7 @@ class OpenAICompatClient:
         temperature: float = 0.1,
         max_tokens: int = API_MAX_OUTPUT_TOKENS,
         run_index: int = 0,
+        on_token=None,
     ) -> BenchmarkResult:
         """
         Call the API (with rate-limit retries) and return a BenchmarkResult.
@@ -108,7 +109,11 @@ class OpenAICompatClient:
         Reasoning models sometimes spend their whole output budget thinking and
         return no visible answer. When that happens we retry once with double
         the budget and (on OpenRouter) low reasoning effort.
+
+        on_token(text_so_far) is called as visible answer text streams in
+        (used to show live streaming in the UI).
         """
+        self._on_token = on_token
         result = BenchmarkResult(
             model=self.model,
             run_index=run_index,
@@ -224,6 +229,8 @@ class OpenAICompatClient:
                 first_token_time = first_token_time or now
                 first_answer_time = first_answer_time or now
                 collected_text.append(delta.content)
+                if getattr(self, "_on_token", None):
+                    self._on_token("".join(collected_text))
 
         wall_s = time.perf_counter() - wall_start
 

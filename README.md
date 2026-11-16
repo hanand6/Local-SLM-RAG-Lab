@@ -36,8 +36,11 @@ Each chapter has three parts:
 | 1 | Prompting vs RAG vs fine-tuning | Same question three ways (prompt only / whole document / RAG), plus a decision drill |
 | 2 | Hallucination and grounding | Strict vs loose prompt, abstention threshold, citation and support checks |
 | 3 | Evals | Golden set + LLM-as-judge vs your own grades; cost-based threshold simulator |
+| 4 | Latency and cost | Live streaming, exact + semantic cache, small/large model routing, build-vs-buy break-even |
+| 5 | Agents and safeguards | A tool-using agent with an approval policy, recipient allowlist and step budget; error-compounding chart; "when not to" drill |
+| 6 | AI system design | This app's architecture as a worked example; a design canvas that draws your diagram and gets an AI critique |
 
-Coming later: latency and cost, agents and safeguards, classic ML literacy, AI system design, launches and responsible AI.
+Coming later: classic ML literacy, launches and responsible AI.
 
 ---
 

@@ -10,22 +10,26 @@ from __future__ import annotations
 
 import streamlit as st
 
-from learn import ch1_prompt_rag_ft, ch2_grounding, ch3_evals
+from learn import (
+    ch1_prompt_rag_ft, ch2_grounding, ch3_evals,
+    ch4_latency_cost, ch5_agents, ch6_system_design,
+)
 from learn.common import calls_used
 
 # Learning order (not the order topics appear in interview prep lists):
-# grounding before evals, because the eval labs reuse grounded answers.
+# grounding before evals, because the eval labs reuse grounded answers;
+# system design last, because it pulls every earlier chapter together.
 CHAPTERS = [
     ch1_prompt_rag_ft.CHAPTER,
     ch2_grounding.CHAPTER,
     ch3_evals.CHAPTER,
+    ch4_latency_cost.CHAPTER,
+    ch5_agents.CHAPTER,
+    ch6_system_design.CHAPTER,
 ]
 
 COMING_SOON = [
-    "Latency and cost",
-    "Agents and safeguards",
     "Classic ML literacy",
-    "AI system design",
     "Launches and responsible AI",
 ]
 

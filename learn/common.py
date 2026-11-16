@@ -20,13 +20,16 @@ from config import MODELS
 
 # ── Model calls ──────────────────────────────────────────────
 
-def call_model(rag, model: str, system: str, prompt: str) -> BenchmarkResult:
-    """Run one prompt on any backend (Ollama or cloud) and count the call."""
+def call_model(rag, model: str, system: str, prompt: str, on_token=None) -> BenchmarkResult:
+    """
+    Run one prompt on any backend (Ollama or cloud) and count the call.
+    on_token(text_so_far) streams the answer where the backend supports it.
+    """
     backend = MODELS.get(model, {}).get("backend", "ollama")
     if backend == "ollama":
         res = rag.benchmarker.run_single(model=model, prompt=prompt, system=system)
     else:
-        res = rag._run_cloud_model(model=model, system=system, prompt=prompt)
+        res = rag._run_cloud_model(model=model, system=system, prompt=prompt, on_token=on_token)
     st.session_state.learn_calls = st.session_state.get("learn_calls", 0) + 1
     return res
 
@@ -62,6 +65,16 @@ def needs_index(rag) -> bool:
 
 # ── Rendering ────────────────────────────────────────────────
 
+def md_safe(text: str) -> str:
+    """Escape $ so Streamlit markdown doesn't render '$4 ... $12' as LaTeX."""
+    return (text or "").replace("$", "\\$")
+
+
+def html_safe(text: str) -> str:
+    """For text placed inside unsafe_allow_html blocks: escape HTML and $."""
+    return html.escape(text or "").replace("$", "&#36;").replace("\n", "<br>")
+
+
 def answer_box(title: str, res: BenchmarkResult | None, note: str = "") -> None:
     st.markdown(f"**{title}**")
     if note:
@@ -71,7 +84,7 @@ def answer_box(title: str, res: BenchmarkResult | None, note: str = "") -> None:
         return
     text = res.response or (f"❌ {res.error}" if res.error else "⚠️ No response.")
     st.markdown(
-        f'<div class="answer-box">{html.escape(text).replace(chr(10), "<br>")}</div>',
+        f'<div class="answer-box">{html_safe(text)}</div>',
         unsafe_allow_html=True,
     )
     if not res.error:
