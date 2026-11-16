@@ -89,7 +89,7 @@ class ModelComparator:
                 "Prompt tokens":      prompt_tokens,
                 "API equiv. cost $":  f"${cost_gpt4o:.5f}",
                 "Local cost $":       "$0.00000",
-                "Privacy":            "✅ 100% local",
+                "Privacy":            _privacy_label(r["model"]),
             })
         return pd.DataFrame(rows)
 
@@ -164,22 +164,30 @@ class ModelComparator:
             params = MODELS.get(model, {}).get("params_b", 0)
             total  = r["total_ms"]
 
-            # Rule-of-thumb RAM: ~0.6 GB per billion params at Q4
-            est_ram_gb = params * 0.6
+            is_local = MODELS.get(model, {}).get("data_local", True)
+
+            # Rule-of-thumb RAM: ~0.6 GB per billion params at Q4 (local only)
+            est_ram_gb = params * 0.6 if is_local else 0.0
 
             analysis[label] = {
-                "privacy_ok":          True,   # always true for local
+                "privacy_ok":          is_local,
                 "interactive_sla_ok":  total < 3000,   # <3s for chat
                 "batch_sla_ok":        total < 10000,  # <10s for doc processing
-                "cost_per_query":      "$0.00",
+                "cost_per_query":      "$0.00",        # local or free-tier cloud
                 "est_ram_gb":          round(est_ram_gb, 1),
-                "gdpr_compliant":      True,
-                "data_leaves_device":  False,
+                "gdpr_compliant":      is_local,
+                "data_leaves_device":  not is_local,
             }
         return analysis
 
 
 # ── Helpers ──────────────────────────────────────────────────
+
+def _privacy_label(model: str) -> str:
+    if MODELS.get(model, {}).get("data_local", True):
+        return "✅ 100% local"
+    return "☁️ Cloud — data leaves device"
+
 
 def _best_use_case(speed: float, latency: float, depth: float) -> str:
     if speed >= 4.0 and latency >= 4.0:

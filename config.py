@@ -11,9 +11,73 @@ load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"), overrid
 
 OLLAMA_BASE_URL = "http://localhost:11434"
 
+# ── OpenRouter (default backend — free cloud models) ────────
+# One key gives access to hundreds of models, including free ones
+# (IDs ending in ":free"). Get a key at https://openrouter.ai/keys
+#
+# ⚠️  Free models change often. To swap them, set OPENROUTER_MODELS in .env
+#     as a comma-separated list, e.g.
+#     OPENROUTER_MODELS=google/gemma-4-26b-a4b-it:free,liquid/lfm-3-1.7b:free
+#     The Setup tab lists the free models available right now.
+OPENROUTER_API_KEY  = os.getenv("OPENROUTER_API_KEY", "")
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+_OPENROUTER_PALETTE = ["#6C8EF5", "#F57CB0", "#5CD6A9", "#F5B95C", "#B48EFF", "#5CC8F5"]
+
+# Known metadata for the default free models (checked 2026-11-16).
+_OPENROUTER_KNOWN = {
+    "liquid/lfm-3-1.7b:free": {
+        "label": "LFM-3 1.7B", "family": "Liquid AI", "params_b": 1.7, "context_len": 262_144,
+    },
+    "google/gemma-4-26b-a4b-it:free": {
+        "label": "Gemma 4 26B-A4B", "family": "Google", "params_b": 26.0, "context_len": 262_144,
+    },
+    "nvidia/nemotron-3.5-lightning:free": {
+        "label": "Nemotron 3.5 Lightning", "family": "NVIDIA", "params_b": 0.0, "context_len": 1_000_000,
+    },
+    "thinkingmachines/inkling-2-small:free": {
+        "label": "Inkling 2 Small", "family": "Thinking Machines", "params_b": 0.0, "context_len": 1_048_576,
+    },
+}
+
+_DEFAULT_OPENROUTER_MODELS = list(_OPENROUTER_KNOWN.keys())
+
+# Judge model for RAGAS evals (should be a larger model — judges need to
+# return well-formed JSON). Override with OPENROUTER_JUDGE_MODEL in .env.
+OPENROUTER_JUDGE_MODEL = os.getenv(
+    "OPENROUTER_JUDGE_MODEL", "google/gemma-4-31b-it:free"
+)
+
+
+def _openrouter_models() -> dict:
+    """Build MODELS entries for OpenRouter from .env (or the defaults)."""
+    raw = os.getenv("OPENROUTER_MODELS", "").strip()
+    ids = [m.strip() for m in raw.split(",") if m.strip()] if raw else _DEFAULT_OPENROUTER_MODELS
+    out = {}
+    for i, model_id in enumerate(ids):
+        known = _OPENROUTER_KNOWN.get(model_id, {})
+        out[model_id] = {
+            "label": "🌐 " + known.get("label", model_id.split("/")[-1].replace(":free", "")),
+            "color": _OPENROUTER_PALETTE[i % len(_OPENROUTER_PALETTE)],
+            "params_b": known.get("params_b", 0.0),
+            "context_len": known.get("context_len", 0),
+            "family": known.get("family", model_id.split("/")[0]),
+            "quantization": "Cloud (managed)",
+            "disk_size_gb": 0.0,
+            "pull_cmd": "# No pull needed — OpenRouter API",
+            "backend": "openrouter",
+            "data_local": False,
+        }
+    return out
+
+
 # ── Models under comparison ─────────────────────────────────
-# Ollama model tags + metadata for display and analysis
+# OpenRouter free models first (default), then optional local Ollama models,
+# then other optional cloud APIs.
 MODELS = {
+    **_openrouter_models(),
+
+    # ── Local models (optional — need Ollama + `ollama pull`) ──
     # ── Local models (via Ollama) ────────────────────────────
     "llama3.2:3b": {
         "label": "Llama 3.2 3B",
@@ -93,9 +157,11 @@ MODELS = {
 }
 
 # ── RAG settings ─────────────────────────────────────────────
-# Embedding model (must be pulled separately: ollama pull nomic-embed-text)
-EMBEDDING_MODEL = "nomic-embed-text"
-EMBEDDING_DIM = 768          # nomic-embed-text output dim
+# Default embedding model: runs locally on CPU via sentence-transformers
+# (~90 MB download on first use, then offline). No Ollama needed.
+# "nomic-embed-text" (Ollama) is still available as an option.
+EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_DIM = 384          # all-MiniLM-L6-v2 output dim
 
 CHUNK_SIZE = 500             # characters per chunk
 CHUNK_OVERLAP = 60           # overlap to preserve context at boundaries
@@ -133,13 +199,24 @@ API_COST_REFERENCE = {
     "☁️ Kimi K2 Instruct":      {"input": 0.60,  "output": 2.50},
     "☁️ Gemini 3":              {"input": 0.00,  "output": 0.00},  # TBD
     "Local (any model)":         {"input": 0.00,  "output": 0.00},
+    "OpenRouter free models":    {"input": 0.00,  "output": 0.00},
 }
 
+# ── Rate limiting / retries for cloud APIs ───────────────────
+# Free tiers return HTTP 429 when you go too fast. We retry with
+# exponential backoff (honouring Retry-After when the API sends it).
+API_MAX_RETRIES = 3
+API_BACKOFF_BASE_S = 4.0     # 4s, 8s, 16s ...
+API_BACKOFF_MAX_S = 30.0
+
 # ── Privacy settings ─────────────────────────────────────────
+# Only true for local models (Ollama). Cloud models (OpenRouter, NVIDIA,
+# Gemini) send your retrieved document chunks to a third party, and free
+# tiers may log prompts. Use non-sensitive documents with cloud models.
 PRIVACY_CONFIG = {
-    "network_calls_blocked": True,   # all inference is local
-    "data_leaves_device": False,
-    "logs_sent_to_vendor": False,
-    "gdpr_compliant": True,          # no external data transfer
+    "network_calls_blocked": False,
+    "data_leaves_device": True,      # with the default (OpenRouter) models
+    "logs_sent_to_vendor": True,
+    "gdpr_compliant": False,
     "telemetry": False,              # chromadb telemetry disabled
 }

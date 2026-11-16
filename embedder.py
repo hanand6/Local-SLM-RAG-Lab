@@ -17,17 +17,19 @@ from config import OLLAMA_BASE_URL
 # ── Embedding model registry ─────────────────────────────────
 
 EMBEDDING_OPTIONS: dict[str, dict] = {
-    "nomic-embed-text": {
-        "label": "nomic-embed-text (Ollama · 768-dim)",
-        "dim": 768,
-        "backend": "ollama",
-        "note": "Pull with: ollama pull nomic-embed-text",
-    },
+    # Default — local CPU, no Ollama needed.
     "all-MiniLM-L6-v2": {
-        "label": "all-MiniLM-L6-v2 (SentenceTransformers · 384-dim)",
+        "label": "all-MiniLM-L6-v2 (SentenceTransformers · 384-dim · default)",
         "dim": 384,
         "backend": "sentence_transformers",
         "note": "Auto-downloaded from HuggingFace on first use (~90 MB).",
+    },
+    # Optional — requires Ollama running + `ollama pull nomic-embed-text`.
+    "nomic-embed-text": {
+        "label": "nomic-embed-text (Ollama · 768-dim · optional)",
+        "dim": 768,
+        "backend": "ollama",
+        "note": "Pull with: ollama pull nomic-embed-text",
     },
 }
 
@@ -40,7 +42,7 @@ class EmbeddingClient:
     Lazy-loads the SentenceTransformer model on first call.
     """
 
-    def __init__(self, model: str = "nomic-embed-text"):
+    def __init__(self, model: str = "all-MiniLM-L6-v2"):
         if model not in EMBEDDING_OPTIONS:
             raise ValueError(
                 f"Unknown embedding model '{model}'. "

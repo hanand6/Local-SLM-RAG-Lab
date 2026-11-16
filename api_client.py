@@ -16,15 +16,61 @@ import time
 from typing import Optional
 
 from benchmarker import BenchmarkResult
+from config import API_MAX_RETRIES, API_BACKOFF_BASE_S, API_BACKOFF_MAX_S
 
 
-# ── NVIDIA NIM / OpenAI-compatible client ────────────────────
+# ── Error helpers ────────────────────────────────────────────
 
-class NvidiaApiClient:
+def _status_code(exc: Exception) -> Optional[int]:
+    return getattr(exc, "status_code", None) or getattr(
+        getattr(exc, "response", None), "status_code", None
+    )
+
+
+def _retry_after_s(exc: Exception) -> Optional[float]:
+    """Read the Retry-After header from an API error, if present."""
+    resp = getattr(exc, "response", None)
+    headers = getattr(resp, "headers", None) or {}
+    try:
+        val = headers.get("retry-after") or headers.get("Retry-After")
+        return float(val) if val else None
+    except (TypeError, ValueError):
+        return None
+
+
+def friendly_api_error(exc: Exception, model: str) -> str:
+    """Turn raw API exceptions into a message that says what to do."""
+    code = _status_code(exc)
+    if code == 401:
+        return "Invalid or missing API key (401). Check your key in .env."
+    if code == 402:
+        return "Out of credits (402). Pick a ':free' model or add credits."
+    if code == 404:
+        return (
+            f"Model '{model}' was not found (404). Free models are renamed or removed "
+            "often. See the Setup tab for models available now, then update "
+            "OPENROUTER_MODELS in .env."
+        )
+    if code == 429:
+        return (
+            "Rate limited (429) even after retrying. Free models allow roughly "
+            "20 requests/min and a daily cap. Wait a minute, run fewer calls, or "
+            "pick another model."
+        )
+    return str(exc)
+
+
+# ── OpenAI-compatible client (OpenRouter, NVIDIA NIM, ...) ───
+
+class OpenAICompatClient:
     """
-    Wraps any OpenAI-compatible API endpoint (NVIDIA NIM, OpenRouter, etc.)
+    Wraps any OpenAI-compatible API endpoint (OpenRouter, NVIDIA NIM, etc.)
     Returns BenchmarkResult so it plugs into the existing benchmark pipeline.
+
+    Retries on 429 (rate limit) and 5xx errors with exponential backoff.
     """
+
+    RETRY_STATUS = {429, 500, 502, 503, 504}
 
     def __init__(self, api_key: str, base_url: str, model: str):
         try:
@@ -33,7 +79,8 @@ class NvidiaApiClient:
             raise ImportError("Install openai: pip install openai")
 
         self.model = model
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        # max_retries=0: we do our own retry loop so we can surface it clearly.
+        self._client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
 
     def generate(
         self,
@@ -43,70 +90,123 @@ class NvidiaApiClient:
         max_tokens: int = 1024,
         run_index: int = 0,
     ) -> BenchmarkResult:
-        """Call the API and return a BenchmarkResult with timing."""
-        messages = []
-        if system:
-            messages.append({"role": "system", "content": system})
-        messages.append({"role": "user", "content": prompt})
-
+        """Call the API (with retries) and return a BenchmarkResult with timing."""
         result = BenchmarkResult(
             model=self.model,
             run_index=run_index,
             prompt_preview=prompt[:120],
         )
 
-        try:
-            wall_start = time.perf_counter()
-            first_token_time: Optional[float] = None
-            collected_text = []
+        last_exc: Optional[Exception] = None
+        for attempt in range(API_MAX_RETRIES + 1):
+            try:
+                self._generate_once(result, prompt, system, temperature, max_tokens)
+                result.error = ""
+                result.retries = attempt
+                return result
+            except Exception as e:
+                last_exc = e
+                code = _status_code(e)
+                if code not in self.RETRY_STATUS or attempt == API_MAX_RETRIES:
+                    break
+                wait = _retry_after_s(e) or API_BACKOFF_BASE_S * (2 ** attempt)
+                time.sleep(min(wait, API_BACKOFF_MAX_S))
 
-            stream = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-                max_tokens=max_tokens,
-                stream=True,
-            )
+        result.error = friendly_api_error(last_exc, self.model)
+        result.retries = attempt
+        return result
 
-            for chunk in stream:
-                if not getattr(chunk, "choices", None):
-                    continue
-                delta = chunk.choices[0].delta
-                if delta and delta.content:
-                    if first_token_time is None:
-                        first_token_time = time.perf_counter()
-                    collected_text.append(delta.content)
+    def _generate_once(
+        self,
+        result: BenchmarkResult,
+        prompt: str,
+        system: str,
+        temperature: float,
+        max_tokens: int,
+    ) -> None:
+        messages = []
+        if system:
+            messages.append({"role": "system", "content": system})
+        messages.append({"role": "user", "content": prompt})
 
-            wall_end = time.perf_counter()
-            wall_s = wall_end - wall_start
+        wall_start = time.perf_counter()
+        first_token_time: Optional[float] = None
+        collected_text = []
+        usage = None
 
-            result.response = "".join(collected_text)
-            result.wall_clock_s = wall_s
-            result.total_duration_ms = wall_s * 1000
+        stream = self._client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stream=True,
+            stream_options={"include_usage": True},
+        )
 
-            # TTFT = wall time to first token
-            result.ttft_ms = (
-                (first_token_time - wall_start) * 1000
-                if first_token_time else wall_s * 1000
-            )
+        for chunk in stream:
+            if getattr(chunk, "usage", None):
+                usage = chunk.usage
+            if not getattr(chunk, "choices", None):
+                continue
+            delta = chunk.choices[0].delta
+            if delta and delta.content:
+                if first_token_time is None:
+                    first_token_time = time.perf_counter()
+                collected_text.append(delta.content)
 
-            # Generation time = total - ttft
-            result.eval_duration_ms = result.total_duration_ms - result.ttft_ms
+        wall_s = time.perf_counter() - wall_start
 
-            # Approximate token counts from character count
-            # (cloud APIs don't always return exact counts in streaming)
+        result.response = "".join(collected_text)
+        result.wall_clock_s = wall_s
+        result.total_duration_ms = wall_s * 1000
+
+        # TTFT = wall time to first token (includes network + provider queue)
+        result.ttft_ms = (
+            (first_token_time - wall_start) * 1000
+            if first_token_time else wall_s * 1000
+        )
+        result.eval_duration_ms = result.total_duration_ms - result.ttft_ms
+
+        # Exact token counts when the API reports usage; otherwise ~4 chars/token.
+        if usage is not None and getattr(usage, "completion_tokens", None):
+            result.output_tokens = usage.completion_tokens
+            result.prompt_tokens = usage.prompt_tokens or max(1, len(prompt) // 4)
+        else:
             result.output_tokens = max(1, len(result.response) // 4)
             result.prompt_tokens = max(1, len(prompt) // 4)
 
-            if result.eval_duration_ms > 0 and result.output_tokens > 0:
-                result.tokens_per_second = result.output_tokens / (
-                    result.eval_duration_ms / 1000
-                )
+        if result.eval_duration_ms > 0 and result.output_tokens > 0:
+            result.tokens_per_second = result.output_tokens / (
+                result.eval_duration_ms / 1000
+            )
 
-        except Exception as e:
-            result.error = str(e)
 
-        return result
+# Backwards-compatible name used elsewhere in the project.
+NvidiaApiClient = OpenAICompatClient
+
+
+def list_openrouter_free_models(timeout: float = 10.0) -> list[dict]:
+    """
+    Public OpenRouter model catalogue, filtered to free models.
+    No API key needed. Returns [{id, name, context_length}, ...].
+    """
+    import requests
+    from config import OPENROUTER_BASE_URL
+
+    r = requests.get(f"{OPENROUTER_BASE_URL}/models", timeout=timeout)
+    r.raise_for_status()
+    return sorted(
+        (
+            {
+                "id": m["id"],
+                "name": m.get("name", m["id"]),
+                "context_length": m.get("context_length", 0),
+            }
+            for m in r.json().get("data", [])
+            if m.get("id", "").endswith(":free")
+        ),
+        key=lambda m: m["id"],
+    )
 
 
 # ── Gemini client ─────────────────────────────────────────────

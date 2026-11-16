@@ -30,6 +30,9 @@ from config import (
     NVIDIA_API_KEY,
     NVIDIA_BASE_URL,
     GEMINI_API_KEY,
+    OPENROUTER_API_KEY,
+    OPENROUTER_BASE_URL,
+    EMBEDDING_MODEL,
 )
 
 
@@ -137,14 +140,15 @@ class RAGEngine:
     Local RAG pipeline with configurable embedding model,
     similarity metric, chunk settings, and optional BM25 reranking.
 
-    Privacy: Ollama models stay 100% local.
-             SentenceTransformer embeddings also run locally after download.
+    Privacy: embeddings (SentenceTransformers by default) and the vector
+             store always run locally. Ollama models stay 100% local;
+             cloud models (OpenRouter etc.) receive the retrieved chunks.
     """
 
     def __init__(
         self,
         collection_name: str = "rag_store",
-        embedding_model: str = "nomic-embed-text",
+        embedding_model: str = EMBEDDING_MODEL,
         similarity: str = "cosine",         # "cosine" | "l2"
         chunk_size: int = CHUNK_SIZE,
         chunk_overlap: int = CHUNK_OVERLAP,
@@ -359,10 +363,25 @@ class RAGEngine:
         run_index: int = 0,
     ) -> BenchmarkResult:
         """Route cloud models to the appropriate API client."""
-        from api_client import NvidiaApiClient, GeminiApiClient
+        from api_client import OpenAICompatClient, NvidiaApiClient, GeminiApiClient
         backend = MODELS.get(model, {}).get("backend", "ollama")
 
-        if backend == "nvidia_nim":
+        if backend == "openrouter":
+            if not OPENROUTER_API_KEY:
+                result = BenchmarkResult(model=model, run_index=run_index, prompt_preview=prompt[:120])
+                result.error = (
+                    "OPENROUTER_API_KEY not set. Get a free key at https://openrouter.ai/keys "
+                    "and add it to your .env file."
+                )
+                return result
+            client = OpenAICompatClient(
+                api_key=OPENROUTER_API_KEY,
+                base_url=OPENROUTER_BASE_URL,
+                model=model,
+            )
+            return client.generate(prompt, system=system, run_index=run_index)
+
+        elif backend == "nvidia_nim":
             if not NVIDIA_API_KEY:
                 result = BenchmarkResult(model=model, run_index=run_index, prompt_preview=prompt[:120])
                 result.error = "NVIDIA_API_KEY not set. Add it to your .env file."

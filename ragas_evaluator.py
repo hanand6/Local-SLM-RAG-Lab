@@ -27,6 +27,11 @@ warnings.filterwarnings("ignore", category=UserWarning, module="ragas")
 # ── Judge configs ─────────────────────────────────────────────
 
 JUDGE_OPTIONS: dict[str, dict] = {
+    "openrouter": {
+        "label":   "🌐 OpenRouter (free)",
+        "backend": "openrouter",
+        "warning": "Uses OPENROUTER_JUDGE_MODEL. Each eval makes several calls — watch free-tier limits.",
+    },
     "gemini": {
         "label":   "☁️ Gemini 2.5 Flash",
         "backend": "gemini",
@@ -54,12 +59,28 @@ JUDGE_OPTIONS: dict[str, dict] = {
 
 def _build_llm(judge_key: str):
     """Return a LangChain LLM wrapper for the given judge key."""
-    from config import GEMINI_API_KEY, NVIDIA_API_KEY, NVIDIA_BASE_URL
+    from config import (
+        GEMINI_API_KEY, NVIDIA_API_KEY, NVIDIA_BASE_URL,
+        OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_JUDGE_MODEL,
+        API_MAX_RETRIES,
+    )
 
     cfg = JUDGE_OPTIONS[judge_key]
     backend = cfg["backend"]
 
-    if backend == "gemini":
+    if backend == "openrouter":
+        from langchain_openai import ChatOpenAI
+        if not OPENROUTER_API_KEY:
+            raise ValueError("OPENROUTER_API_KEY not set in .env")
+        return ChatOpenAI(
+            model=OPENROUTER_JUDGE_MODEL,
+            base_url=OPENROUTER_BASE_URL,
+            api_key=OPENROUTER_API_KEY,
+            temperature=0,
+            max_retries=API_MAX_RETRIES,
+        )
+
+    elif backend == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
         if not GEMINI_API_KEY:
             raise ValueError("GEMINI_API_KEY not set in .env")
@@ -98,10 +119,11 @@ def _build_embeddings():
     """Return a LangChain embeddings wrapper using our EmbeddingClient."""
     from langchain_core.embeddings import Embeddings
     from embedder import EmbeddingClient
+    from config import EMBEDDING_MODEL
 
     class _LocalEmbeddings(Embeddings):
         def __init__(self):
-            self._client = EmbeddingClient("nomic-embed-text")
+            self._client = EmbeddingClient(EMBEDDING_MODEL)
 
         def embed_documents(self, texts: list[str]) -> list[list[float]]:
             return self._client.embed_batch(texts)

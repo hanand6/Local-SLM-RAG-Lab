@@ -51,6 +51,9 @@ class BenchmarkResult:
     response: str = ""
     error: str = ""
 
+    # Cloud APIs: how many times we retried after a rate limit / server error
+    retries: int = 0
+
     def to_dict(self) -> dict:
         return asdict(self)
 

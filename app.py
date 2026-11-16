@@ -20,7 +20,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
-from config import MODELS, BENCHMARK_PROMPTS, OLLAMA_BASE_URL, NVIDIA_API_KEY, GEMINI_API_KEY
+from config import (
+    MODELS, BENCHMARK_PROMPTS, OLLAMA_BASE_URL, NVIDIA_API_KEY, GEMINI_API_KEY,
+    OPENROUTER_API_KEY, EMBEDDING_MODEL,
+)
+from api_client import list_openrouter_free_models
 from embedder import EMBEDDING_OPTIONS
 from ollama_client import OllamaClient
 from rag_engine import RAGEngine
@@ -39,7 +43,7 @@ def hex_to_rgba(hex_color: str, alpha: float = 0.2) -> str:
 # ── Page config ──────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="Local SLM RAG Lab",
+    page_title="SLM RAG Lab",
     page_icon="🧠",
     layout="wide",
     initial_sidebar_state="expanded",
@@ -106,7 +110,7 @@ st.markdown("""
 def init_state():
     # Indexing config — stored separately so we can detect changes
     if "embed_model" not in st.session_state:
-        st.session_state.embed_model = "nomic-embed-text"
+        st.session_state.embed_model = EMBEDDING_MODEL
     if "similarity" not in st.session_state:
         st.session_state.similarity = "cosine"
     if "chunk_size" not in st.session_state:
@@ -141,17 +145,28 @@ comparator: ModelComparator = st.session_state.comparator
 # ── Sidebar ──────────────────────────────────────────────────
 
 with st.sidebar:
-    st.markdown("## 🧠 Local SLM RAG Lab")
-    st.caption("All inference runs on your device. Zero external calls.")
+    st.markdown("## 🧠 SLM RAG Lab")
+    st.caption("Free OpenRouter models by default. Local Ollama models optional.")
 
     st.divider()
 
-    # Ollama status
+    # OpenRouter key status
+    if OPENROUTER_API_KEY:
+        st.markdown("**OpenRouter:** 🟢 Key set")
+    else:
+        st.markdown("**OpenRouter:** 🔴 No key")
+        st.error(
+            "Add `OPENROUTER_API_KEY=...` to `.env` "
+            "(free key: [openrouter.ai/keys](https://openrouter.ai/keys)), then restart.",
+            icon="🔑",
+        )
+
+    # Ollama status (optional)
     ollama_ok = client.is_running()
-    status_color = "🟢" if ollama_ok else "🔴"
-    st.markdown(f"**Ollama:** {status_color} {'Running' if ollama_ok else 'Not detected'}")
-    if not ollama_ok:
-        st.error("Start Ollama: `ollama serve`", icon="⚠️")
+    ollama_models = client.list_models() if ollama_ok else []
+    st.markdown(
+        f"**Ollama (optional):** {'🟢 Running' if ollama_ok else '⚪ Not running'}"
+    )
 
     # Index status
     chunk_count = rag.chunk_count
@@ -168,14 +183,17 @@ with st.sidebar:
         is_cloud = not meta.get("data_local", True)
 
         if backend == "ollama":
-            available = client.is_model_available(model_id) if ollama_ok else False
+            available = any(model_id in m or m.startswith(model_id) for m in ollama_models)
             status_icon = "✅" if available else "⬜"
+            default_on = available
         else:
             # Cloud models are always reachable (key check happens at query time)
             status_icon = "☁️"
+            # Default: only the free OpenRouter models are ticked
+            default_on = backend == "openrouter"
 
         label = f"{status_icon} {meta['label']}"
-        checked = st.checkbox(label, value=True, key=f"chk_{model_id}")
+        checked = st.checkbox(label, value=default_on, key=f"chk_{model_id}")
         if checked:
             selected.append(model_id)
 
@@ -191,19 +209,25 @@ with st.sidebar:
         )
 
     st.divider()
-    privacy = client.verify_privacy()
     st.markdown("### 🔒 Privacy Status")
-    st.markdown(f"""
-    - **Endpoint:** `{privacy['endpoint']}`
-    - **Egress:** {privacy['network_egress']}
-    - **Data leaves device:** {'No' if not privacy['data_leaves_device'] else 'Yes'}
-    """)
+    if cloud_selected:
+        st.markdown(
+            "- **Embeddings & vector store:** local\n"
+            "- **Generation:** cloud API — retrieved chunks leave your device\n"
+            "- **Use:** non-sensitive documents only"
+        )
+    else:
+        st.markdown(
+            "- **Embeddings & vector store:** local\n"
+            "- **Generation:** local Ollama only\n"
+            "- **Data leaves device:** No"
+        )
 
 
 # ── Main area ────────────────────────────────────────────────
 
-st.title("🧠 Local SLM RAG Lab")
-st.caption("Document Q&A · Inference Benchmarking · Model Comparison · Privacy-first")
+st.title("🧠 SLM RAG Lab")
+st.caption("Document Q&A · Model Comparison · Benchmarking · Evaluation")
 
 tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "⚙️ Setup",
@@ -224,33 +248,67 @@ with tab1:
 
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Ollama Health")
-        if ollama_ok:
-            st.success("Ollama is running on localhost:11434")
-            available_models = client.list_models()
-            st.write(f"**Pulled models ({len(available_models)}):**")
-            for m in available_models:
-                st.code(m, language=None)
+        st.subheader("🌐 OpenRouter (default)")
+        if OPENROUTER_API_KEY:
+            st.success("OPENROUTER_API_KEY is set — free models ready")
         else:
-            st.error("Ollama is not running.")
-            st.markdown("""
-**To start Ollama:**
-```bash
-# macOS / Linux
-brew install ollama   # or download from ollama.ai
-ollama serve
-```
-            """)
+            st.error("OPENROUTER_API_KEY not set")
+            st.markdown(
+                "1. Create a free key at [openrouter.ai/keys](https://openrouter.ai/keys)\n"
+                "2. Add `OPENROUTER_API_KEY=sk-or-...` to `.env`\n"
+                "3. Restart the app"
+            )
+        st.caption(
+            "Free models are rate-limited (roughly 20 requests/min plus a daily cap). "
+            "Rate-limited calls are retried automatically with backoff."
+        )
 
     with col2:
-        st.subheader("Pull Required Models")
-        st.markdown("Run these commands in your terminal:")
+        st.subheader("Free models available right now")
+
+        @st.cache_data(ttl=3600, show_spinner=False)
+        def _free_models():
+            return list_openrouter_free_models()
+
+        try:
+            free = _free_models()
+            configured = {m for m, meta in MODELS.items() if meta.get("backend") == "openrouter"}
+            st.dataframe(
+                pd.DataFrame([
+                    {
+                        "In use": "✅" if m["id"] in configured else "",
+                        "Model ID": m["id"],
+                        "Context (k)": m["context_length"] // 1000,
+                    }
+                    for m in free
+                ]),
+                use_container_width=True, hide_index=True, height=240,
+            )
+            missing = configured - {m["id"] for m in free}
+            if missing:
+                st.warning(
+                    "No longer free/available: " + ", ".join(sorted(missing))
+                    + ". Update `OPENROUTER_MODELS` in `.env`."
+                )
+            st.caption(
+                "To swap models, set `OPENROUTER_MODELS=id1,id2,...` in `.env` and restart."
+            )
+        except Exception as e:
+            st.info(f"Could not fetch the OpenRouter model list: {e}")
+
+    with st.expander("🖥️ Optional: local models with Ollama"):
+        if ollama_ok:
+            st.success(f"Ollama is running on {OLLAMA_BASE_URL}")
+            st.write(f"**Pulled models ({len(ollama_models)}):** "
+                     + (", ".join(f"`{m}`" for m in ollama_models) or "none"))
+        else:
+            st.info("Ollama is not running. That's fine — it's only needed for local models.")
         pull_cmds = "\n".join(
-            f"ollama pull {mid}  # {meta['label']} — {meta['disk_size_gb']}GB"
-            for mid, meta in MODELS.items()
+            f"{meta['pull_cmd']}  # {meta['label']} — {meta['disk_size_gb']}GB"
+            for mid, meta in MODELS.items() if meta.get("backend") == "ollama"
         )
-        pull_cmds += "\nollama pull nomic-embed-text  # for embeddings"
-        st.code(pull_cmds, language="bash")
+        pull_cmds += "\nollama pull nomic-embed-text  # optional embedding model"
+        st.code("ollama serve\n" + pull_cmds, language="bash")
 
     st.divider()
     st.subheader("Model Specifications")
@@ -259,17 +317,21 @@ ollama serve
         backend = meta.get("backend", "ollama")
         is_cloud = not meta.get("data_local", True)
         if backend == "ollama":
-            available = client.is_model_available(mid) if ollama_ok else False
+            available = any(mid in m or m.startswith(mid) for m in ollama_models)
             status = "✅ Available" if available else "⬜ Not pulled"
         else:
             # Check if API key is configured
-            has_key = bool(NVIDIA_API_KEY) if backend == "nvidia_nim" else bool(GEMINI_API_KEY)
+            has_key = {
+                "openrouter": bool(OPENROUTER_API_KEY),
+                "nvidia_nim": bool(NVIDIA_API_KEY),
+                "gemini":     bool(GEMINI_API_KEY),
+            }.get(backend, False)
             status = "🔑 Key set" if has_key else "🔴 No API key"
         specs.append({
             "Model":        meta["label"],
             "Family":       meta["family"],
             "Params (B)":   meta["params_b"] if meta["params_b"] else "N/A",
-            "Context (k)":  f"{meta['context_len']//1000}k",
+            "Context (k)":  f"{meta['context_len']//1000}k" if meta["context_len"] else "?",
             "Disk (GB)":    meta["disk_size_gb"] if not is_cloud else "☁️ Cloud",
             "Backend":      "☁️ API" if is_cloud else "🖥️ Local",
             "Data private": "✅ Yes" if not is_cloud else "❌ No — cloud",
@@ -291,25 +353,29 @@ ollama serve
         """)
     with c2:
         st.markdown("""
-**Cloud models (Kimi K2, Gemini 3)**
-- ❌ Data sent to remote servers
-- 🔑 API keys required
-- ⚠️ Not for confidential docs
-- 💰 Per-token billing may apply
-- ✅ No local GPU needed
+**Cloud models (OpenRouter, Kimi K2, Gemini)**
+- ❌ Retrieved chunks sent to remote servers
+- ⚠️ Free tiers may log prompts — not for confidential docs
+- 🔑 API key required
+- ⏱️ Rate limits on free tiers
+- ✅ No local GPU or model downloads needed
         """)
     with c3:
         st.markdown("""
-**API Key Setup**
-- Set `NVIDIA_API_KEY` env var
-- Set `GEMINI_API_KEY` env var
-- Get NVIDIA key (free): [build.nvidia.com](https://build.nvidia.com)
-- Get Gemini key: [aistudio.google.com](https://aistudio.google.com)
+**API Key Setup (in `.env`)**
+- `OPENROUTER_API_KEY` — default ([openrouter.ai/keys](https://openrouter.ai/keys))
+- `NVIDIA_API_KEY` — optional ([build.nvidia.com](https://build.nvidia.com))
+- `GEMINI_API_KEY` — optional ([aistudio.google.com](https://aistudio.google.com))
         """)
 
     st.divider()
     st.subheader("🔑 API Key Status")
-    k1, k2 = st.columns(2)
+    k0, k1, k2 = st.columns(3)
+    with k0:
+        if OPENROUTER_API_KEY:
+            st.success("✅ OPENROUTER_API_KEY is set")
+        else:
+            st.error("❌ OPENROUTER_API_KEY not set (required for default models)")
     with k1:
         if NVIDIA_API_KEY:
             st.success("✅ NVIDIA_API_KEY is set — Kimi K2 ready")
@@ -347,7 +413,7 @@ with tab2:
                             tmp.write(uf.getbuffer())
                             tmp_path = tmp.name
 
-                        with st.spinner(f"Embedding {uf.name} with {MODELS.get('nomic-embed-text', {}).get('label', 'nomic-embed-text')}..."):
+                        with st.spinner(f"Embedding {uf.name} with {rag.embedding_model} (first run downloads the model)..."):
                             try:
                                 stats = rag.index_file(tmp_path)
                                 st.success(
@@ -522,8 +588,11 @@ with tab3:
                     icon="🔓"
                 )
 
-            if backend == "ollama" and ask_model not in (client.list_models() if ollama_ok else []):
-                st.error(f"Model {ask_model} not pulled. Run: `ollama pull {ask_model}`")
+            if backend == "ollama" and ask_model not in ollama_models:
+                st.error(
+                    f"Local model {ask_model} is not available. Start Ollama and run "
+                    f"`ollama pull {ask_model}`, or pick an OpenRouter model."
+                )
 
             elif use_bm25:
                 # ── BM25 COMPARISON MODE ── run LLM twice
@@ -1056,12 +1125,10 @@ with tab6:
 {chr(10).join(f"- **{row['Model']}:** {row['Best for']}" for _, row in tradeoff_df.iterrows())}
 
 ### Privacy & Cost Summary
-All models score **identical** on privacy (100% local, zero egress) and cost ($0.00/query).
-This is the core advantage of local SLMs:
-- No API keys to rotate
-- No per-token billing (unlimited inference)
-- No data leaving your device (GDPR, HIPAA, SOC2 friendly)
-- Latency is bounded by YOUR hardware, not a shared cloud
+Local (Ollama) models: 100% local, zero egress, $0/query, latency bounded by your hardware.
+Free cloud models (OpenRouter): $0/query but rate-limited; retrieved chunks leave your device
+and free tiers may log prompts. Their latency numbers include network and provider queue time,
+so compare them with each other, not with local models.
 
 ### Latency vs Cloud API
 | Scenario | Local SLM | GPT-4o API |
@@ -1102,7 +1169,7 @@ with tab7:
         with col:
             checked = st.checkbox(
                 jmeta["label"],
-                value=(jkey == "gemini"),
+                value=(jkey == "openrouter"),
                 key=f"judge_chk_{jkey}",
             )
             if jmeta["warning"]:
