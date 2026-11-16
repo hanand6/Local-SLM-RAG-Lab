@@ -16,7 +16,10 @@ import time
 from typing import Optional
 
 from benchmarker import BenchmarkResult
-from config import API_MAX_RETRIES, API_BACKOFF_BASE_S, API_BACKOFF_MAX_S
+from config import (
+    API_MAX_RETRIES, API_BACKOFF_BASE_S, API_BACKOFF_MAX_S,
+    API_TIMEOUT_S, API_MAX_OUTPUT_TOKENS,
+)
 
 
 # ── Error helpers ────────────────────────────────────────────
@@ -45,6 +48,11 @@ def friendly_api_error(exc: Exception, model: str) -> str:
         return "Invalid or missing API key (401). Check your key in .env."
     if code == 402:
         return "Out of credits (402). Pick a ':free' model or add credits."
+    if code == 403:
+        return (
+            f"Access to '{model}' is restricted (403). Some free models are limited "
+            "to specific apps. Pick another model via OPENROUTER_MODELS in .env."
+        )
     if code == 404:
         return (
             f"Model '{model}' was not found (404). Free models are renamed or removed "
@@ -80,14 +88,17 @@ class OpenAICompatClient:
 
         self.model = model
         # max_retries=0: we do our own retry loop so we can surface it clearly.
-        self._client = OpenAI(api_key=api_key, base_url=base_url, max_retries=0)
+        self._client = OpenAI(
+            api_key=api_key, base_url=base_url,
+            max_retries=0, timeout=API_TIMEOUT_S,
+        )
 
     def generate(
         self,
         prompt: str,
         system: str = "",
         temperature: float = 0.1,
-        max_tokens: int = 1024,
+        max_tokens: int = API_MAX_OUTPUT_TOKENS,
         run_index: int = 0,
     ) -> BenchmarkResult:
         """Call the API (with retries) and return a BenchmarkResult with timing."""
@@ -103,6 +114,17 @@ class OpenAICompatClient:
                 self._generate_once(result, prompt, system, temperature, max_tokens)
                 result.error = ""
                 result.retries = attempt
+                if not result.response.strip():
+                    result.error = (
+                        f"Empty answer from '{self.model}'. "
+                        + (
+                            f"It is a reasoning model and spent all {max_tokens} output "
+                            "tokens thinking. Raise API_MAX_OUTPUT_TOKENS in config.py "
+                            "or pick another model."
+                            if result.reasoning_tokens or result.finish_reason == "length"
+                            else "The provider returned no text; try again or pick another model."
+                        )
+                    )
                 return result
             except Exception as e:
                 last_exc = e
@@ -130,8 +152,11 @@ class OpenAICompatClient:
         messages.append({"role": "user", "content": prompt})
 
         wall_start = time.perf_counter()
-        first_token_time: Optional[float] = None
+        first_token_time: Optional[float] = None    # first token of any kind
+        first_answer_time: Optional[float] = None   # first visible answer token
         collected_text = []
+        reasoning_chars = 0
+        finish_reason = ""
         usage = None
 
         stream = self._client.chat.completions.create(
@@ -148,32 +173,56 @@ class OpenAICompatClient:
                 usage = chunk.usage
             if not getattr(chunk, "choices", None):
                 continue
-            delta = chunk.choices[0].delta
-            if delta and delta.content:
-                if first_token_time is None:
-                    first_token_time = time.perf_counter()
+            choice = chunk.choices[0]
+            if getattr(choice, "finish_reason", None):
+                finish_reason = choice.finish_reason
+            delta = choice.delta
+            if not delta:
+                continue
+            # Reasoning models (via OpenRouter) stream hidden thinking in a
+            # separate `reasoning` field before the visible answer.
+            reasoning = getattr(delta, "reasoning", None) or (
+                (getattr(delta, "model_extra", None) or {}).get("reasoning")
+            )
+            now = time.perf_counter()
+            if reasoning:
+                reasoning_chars += len(reasoning)
+                first_token_time = first_token_time or now
+            if delta.content:
+                first_token_time = first_token_time or now
+                first_answer_time = first_answer_time or now
                 collected_text.append(delta.content)
 
         wall_s = time.perf_counter() - wall_start
 
         result.response = "".join(collected_text)
+        result.finish_reason = finish_reason
         result.wall_clock_s = wall_s
         result.total_duration_ms = wall_s * 1000
 
-        # TTFT = wall time to first token (includes network + provider queue)
+        # TTFT = wall time to the first streamed token, reasoning included
+        # (network + provider queue + prefill). Generation = the rest.
         result.ttft_ms = (
             (first_token_time - wall_start) * 1000
             if first_token_time else wall_s * 1000
         )
         result.eval_duration_ms = result.total_duration_ms - result.ttft_ms
+        # Time until the user sees the first word of the answer.
+        result.time_to_answer_ms = (
+            (first_answer_time - wall_start) * 1000
+            if first_answer_time else wall_s * 1000
+        )
 
         # Exact token counts when the API reports usage; otherwise ~4 chars/token.
         if usage is not None and getattr(usage, "completion_tokens", None):
             result.output_tokens = usage.completion_tokens
             result.prompt_tokens = usage.prompt_tokens or max(1, len(prompt) // 4)
+            details = getattr(usage, "completion_tokens_details", None)
+            result.reasoning_tokens = getattr(details, "reasoning_tokens", 0) or 0
         else:
-            result.output_tokens = max(1, len(result.response) // 4)
+            result.output_tokens = max(1, (len(result.response) + reasoning_chars) // 4)
             result.prompt_tokens = max(1, len(prompt) // 4)
+            result.reasoning_tokens = reasoning_chars // 4
 
         if result.eval_duration_ms > 0 and result.output_tokens > 0:
             result.tokens_per_second = result.output_tokens / (

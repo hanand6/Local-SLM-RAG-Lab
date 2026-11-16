@@ -62,7 +62,7 @@ def _build_llm(judge_key: str):
     from config import (
         GEMINI_API_KEY, NVIDIA_API_KEY, NVIDIA_BASE_URL,
         OPENROUTER_API_KEY, OPENROUTER_BASE_URL, OPENROUTER_JUDGE_MODEL,
-        API_MAX_RETRIES,
+        API_TIMEOUT_S,
     )
 
     cfg = JUDGE_OPTIONS[judge_key]
@@ -77,7 +77,8 @@ def _build_llm(judge_key: str):
             base_url=OPENROUTER_BASE_URL,
             api_key=OPENROUTER_API_KEY,
             temperature=0,
-            max_retries=API_MAX_RETRIES,
+            timeout=API_TIMEOUT_S,
+            max_retries=2,          # RAGAS adds its own retries on top (RunConfig)
         )
 
     elif backend == "gemini":
@@ -177,6 +178,18 @@ def _build_metrics(llm, embeddings, has_ground_truth: bool):
     return metrics
 
 
+def _run_config():
+    """Pace judge calls for free-tier rate limits (RAGAS default is 16 workers)."""
+    from ragas.run_config import RunConfig
+    from config import RAGAS_MAX_WORKERS, RAGAS_TIMEOUT_S, RAGAS_MAX_RETRIES, RAGAS_MAX_WAIT_S
+    return RunConfig(
+        max_workers=RAGAS_MAX_WORKERS,
+        timeout=RAGAS_TIMEOUT_S,
+        max_retries=RAGAS_MAX_RETRIES,
+        max_wait=RAGAS_MAX_WAIT_S,
+    )
+
+
 # ── Public API ────────────────────────────────────────────────
 
 class RagasEvaluator:
@@ -233,9 +246,14 @@ class RagasEvaluator:
 
         try:
             t0     = time.perf_counter()
-            result = evaluate(dataset=ds, metrics=mets, raise_exceptions=False)
+            result = evaluate(dataset=ds, metrics=mets, raise_exceptions=False, run_config=_run_config())
             elapsed = round(time.perf_counter() - t0, 1)
-            scores  = {k: round(float(v), 3) for k, v in result.items()}
+            # RAGAS 0.4: EvaluationResult has no .items(); read the score row.
+            row_scores = result.to_pandas().iloc[0]
+            scores  = {
+                m.name: round(float(row_scores[m.name]), 3) if m.name in row_scores else float("nan")
+                for m in mets
+            }
             scores["eval_time_s"] = elapsed
         except Exception as e:
             scores = {m.name: float("nan") for m in mets}
@@ -278,7 +296,7 @@ class RagasEvaluator:
             tag  = JUDGE_OPTIONS[judge]["label"].split(" ", 1)[-1].strip("️").strip()
 
             try:
-                result = evaluate(dataset=ds, metrics=mets, raise_exceptions=False)
+                result = evaluate(dataset=ds, metrics=mets, raise_exceptions=False, run_config=_run_config())
                 result_df = result.to_pandas()
                 for metric in mets:
                     col_name = f"{metric.name} [{tag}]"

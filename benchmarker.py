@@ -53,6 +53,11 @@ class BenchmarkResult:
 
     # Cloud APIs: how many times we retried after a rate limit / server error
     retries: int = 0
+    # Reasoning models: hidden "thinking" tokens (included in output_tokens)
+    reasoning_tokens: int = 0
+    # Time until the first visible answer token (after any reasoning)
+    time_to_answer_ms: float = 0.0
+    finish_reason: str = ""
 
     def to_dict(self) -> dict:
         return asdict(self)

@@ -25,6 +25,7 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 _OPENROUTER_PALETTE = ["#6C8EF5", "#F57CB0", "#5CD6A9", "#F5B95C", "#B48EFF", "#5CC8F5"]
 
 # Known metadata for the default free models (checked 2026-11-16).
+# Gemma 4 26B is popular and often rate-limited upstream — expect retries.
 _OPENROUTER_KNOWN = {
     "liquid/lfm-3-1.7b:free": {
         "label": "LFM-3 1.7B", "family": "Liquid AI", "params_b": 1.7, "context_len": 262_144,
@@ -35,8 +36,14 @@ _OPENROUTER_KNOWN = {
     "nvidia/nemotron-3.5-lightning:free": {
         "label": "Nemotron 3.5 Lightning", "family": "NVIDIA", "params_b": 0.0, "context_len": 1_000_000,
     },
-    "thinkingmachines/inkling-2-small:free": {
-        "label": "Inkling 2 Small", "family": "Thinking Machines", "params_b": 0.0, "context_len": 1_048_576,
+    "baidu/ernie-5.5-flash-preview:free": {
+        "label": "ERNIE 5.5 Flash", "family": "Baidu", "params_b": 0.0, "context_len": 1_024_000,
+    },
+    "cohere/north-mini-code:free": {
+        "label": "North Mini Code", "family": "Cohere", "params_b": 0.0, "context_len": 256_000,
+    },
+    "recursive/flint-v1.0:free": {
+        "label": "Flint v1.0", "family": "Recursive", "params_b": 0.0, "context_len": 262_144,
     },
 }
 
@@ -45,7 +52,7 @@ _DEFAULT_OPENROUTER_MODELS = list(_OPENROUTER_KNOWN.keys())
 # Judge model for RAGAS evals (should be a larger model — judges need to
 # return well-formed JSON). Override with OPENROUTER_JUDGE_MODEL in .env.
 OPENROUTER_JUDGE_MODEL = os.getenv(
-    "OPENROUTER_JUDGE_MODEL", "google/gemma-4-31b-it:free"
+    "OPENROUTER_JUDGE_MODEL", "nvidia/nemotron-3.5-lightning:free"
 )
 
 
@@ -208,6 +215,22 @@ API_COST_REFERENCE = {
 API_MAX_RETRIES = 3
 API_BACKOFF_BASE_S = 4.0     # 4s, 8s, 16s ...
 API_BACKOFF_MAX_S = 30.0
+API_TIMEOUT_S = 120.0        # per attempt; free-tier queues can be slow
+# Output budget per answer. Reasoning ("thinking") models spend part of this
+# on hidden reasoning before the visible answer, so keep it generous.
+API_MAX_OUTPUT_TOKENS = 2048
+
+# ── RAGAS judge pacing ───────────────────────────────────────
+# RAGAS defaults to 16 parallel judge calls — far above free-tier limits.
+RAGAS_MAX_WORKERS = 2
+RAGAS_TIMEOUT_S = 180
+RAGAS_MAX_RETRIES = 6
+RAGAS_MAX_WAIT_S = 60
+
+# ── Indexing ─────────────────────────────────────────────────
+# ChromaDB rejects inserts above ~5,461 items, so large documents are
+# embedded and stored in batches of this size.
+INDEX_BATCH_SIZE = 512
 
 # ── Privacy settings ─────────────────────────────────────────
 # Only true for local models (Ollama). Cloud models (OpenRouter, NVIDIA,

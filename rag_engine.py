@@ -33,6 +33,7 @@ from config import (
     OPENROUTER_API_KEY,
     OPENROUTER_BASE_URL,
     EMBEDDING_MODEL,
+    INDEX_BATCH_SIZE,
 )
 
 
@@ -214,10 +215,14 @@ class RAGEngine:
 
     # ── Indexing ─────────────────────────────────────────────
 
-    def index_file(self, file_path: str) -> dict:
+    def index_file(self, file_path: str, progress_cb=None) -> dict:
         """
         Load → chunk → embed → store.
         Uses current chunker settings (chunk_size, overlap).
+        Embeds and stores in batches (ChromaDB caps a single insert at
+        ~5,461 items, and batching lets the UI show progress).
+
+        progress_cb(done_chunks, total_chunks) is called after each batch.
         Returns indexing stats.
         """
         t0 = time.perf_counter()
@@ -228,18 +233,20 @@ class RAGEngine:
 
         # 2. Chunk
         chunks = self.chunker.split(raw_text)
+        total = len(chunks)
 
-        # 3. Embed (local — Ollama or SentenceTransformers)
-        embeddings = self.embed_client.embed_batch(chunks)
-
-        # 4. Store
-        ids = [f"{doc_name}::chunk::{i}" for i in range(len(chunks))]
-        self._collection.add(
-            embeddings=embeddings,
-            documents=chunks,
-            ids=ids,
-            metadatas=[{"source": doc_name, "chunk_idx": i} for i in range(len(chunks))],
-        )
+        # 3 + 4. Embed (local) and store, batch by batch
+        for start in range(0, total, INDEX_BATCH_SIZE):
+            batch = chunks[start:start + INDEX_BATCH_SIZE]
+            idxs = range(start, start + len(batch))
+            self._collection.add(
+                embeddings=self.embed_client.embed_batch(batch),
+                documents=batch,
+                ids=[f"{doc_name}::chunk::{i}" for i in idxs],
+                metadatas=[{"source": doc_name, "chunk_idx": i} for i in idxs],
+            )
+            if progress_cb:
+                progress_cb(start + len(batch), total)
 
         elapsed = time.perf_counter() - t0
         stats = {
@@ -257,12 +264,13 @@ class RAGEngine:
     def index_text(self, text: str, doc_name: str = "pasted_text") -> dict:
         """Index raw text directly (for paste-in content)."""
         import tempfile
-        tmp = tempfile.NamedTemporaryFile(suffix=".txt", delete=False, mode="w")
-        tmp.write(text)
-        tmp.close()
-        result = self.index_file(tmp.name)
+        # Name the temp file after doc_name so citations show the right source.
+        safe = "".join(c if c.isalnum() or c in "-_ ." else "_" for c in doc_name).strip() or "pasted_text"
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            path = Path(tmp_dir) / f"{safe}.txt"
+            path.write_text(text, encoding="utf-8")
+            result = self.index_file(str(path))
         result["doc_name"] = doc_name
-        os.unlink(tmp.name)
         return result
 
     # ── Retrieval ────────────────────────────────────────────

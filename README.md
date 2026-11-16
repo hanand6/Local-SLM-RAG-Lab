@@ -71,7 +71,28 @@ Free models allow roughly **20 requests/minute** plus a **daily cap**. The daily
 - retries rate-limited (HTTP 429) and server-error calls with exponential backoff, using `Retry-After` when the API sends it
 - shows a clear message when a model is missing (404), the key is wrong (401) or you're still rate-limited after retries
 
-Keep benchmark and eval runs small: the Benchmark tab shows how many calls a run will make before you start it.
+Keep benchmark and eval runs small: the Benchmark tab shows how many calls a run will make before you start it. RAGAS judge calls run 2 at a time (not RAGAS's default 16) to stay under the limits.
+
+### Reasoning models
+
+Some free models "think" before answering (for example LFM-3, North Mini Code and Flint). That thinking counts as output tokens, so the app gives each answer a 2,048-token budget (`API_MAX_OUTPUT_TOKENS`). Results report reasoning tokens separately, plus the time until the first visible word of the answer.
+
+---
+
+## Document size
+
+Rate limits don't depend on document size. Indexing is fully local (embeddings on your CPU), and each question sends only the top-k chunks (~2.5 KB) to the model. What does grow with size is **indexing time**:
+
+| Text in document | Chunks (approx.) | Indexing time (measured, CPU) |
+|---|---|---|
+| 1 MB | ~1,300 | ~25 s |
+| 5 MB | ~6,500 | ~2 min |
+| 30 MB | ~40,000 | ~15–20 min |
+
+- The size that matters is the **text**, not the file. A 30 MB PDF full of images may hold only 1–2 MB of text.
+- Indexing runs in batches with a progress bar. The upload limit is Streamlit's default 200 MB.
+- The index is in memory, so it is cleared when the app restarts.
+- RAG answers questions from a few chunks. It can't "summarize the whole document" for large files.
 
 ---
 

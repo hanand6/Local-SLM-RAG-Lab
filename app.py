@@ -414,8 +414,19 @@ with tab2:
                             tmp_path = tmp.name
 
                         with st.spinner(f"Embedding {uf.name} with {rag.embedding_model} (first run downloads the model)..."):
+                            bar = st.progress(0.0, text="Chunking...")
+
+                            def _progress(done, total, _bar=bar, _t0=time.perf_counter()):
+                                elapsed = time.perf_counter() - _t0
+                                eta = elapsed / done * (total - done) if done else 0
+                                _bar.progress(
+                                    done / total,
+                                    text=f"Embedded {done:,}/{total:,} chunks · ~{eta:.0f}s left",
+                                )
+
                             try:
-                                stats = rag.index_file(tmp_path)
+                                stats = rag.index_file(tmp_path, progress_cb=_progress)
+                                bar.empty()
                                 st.success(
                                     f"✅ Indexed {stats['chunks']} chunks "
                                     f"in {stats['index_time_s']}s — "
