@@ -38,9 +38,11 @@ Each chapter has three parts:
 | 3 | Evals | Golden set + LLM-as-judge vs your own grades; cost-based threshold simulator |
 | 4 | Latency and cost | Live streaming, exact + semantic cache, small/large model routing, build-vs-buy break-even |
 | 5 | Agents and safeguards | A tool-using agent with an approval policy, recipient allowlist and step budget; error-compounding chart; "when not to" drill |
-| 6 | AI system design | This app's architecture as a worked example; a design canvas that draws your diagram and gets an AI critique |
+| 6 | Classic ML literacy | Why accuracy lies on imbalanced data; rules vs TF-IDF classifier vs LLM on ticket routing; "which approach" drill |
+| 7 | AI system design | This app's architecture as a worked example; a design canvas that draws your diagram and gets an AI critique |
+| 8 | Launches and responsible AI | Staged-rollout simulator with guardrails and hidden failure scenarios; name-swap bias probe; EU AI Act risk-tier drill |
 
-Coming later: classic ML literacy, launches and responsible AI.
+Each chapter's interview card covers the matching question type from AI PM interview prep. The order builds up: ML literacy comes before system design, and launches come last.
 
 ---
 

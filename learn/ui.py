@@ -13,25 +13,26 @@ import streamlit as st
 from learn import (
     ch1_prompt_rag_ft, ch2_grounding, ch3_evals,
     ch4_latency_cost, ch5_agents, ch6_system_design,
+    ch7_ml_literacy, ch8_launch_rai,
 )
 from learn.common import calls_used
 
 # Learning order (not the order topics appear in interview prep lists):
 # grounding before evals, because the eval labs reuse grounded answers;
-# system design last, because it pulls every earlier chapter together.
+# ML literacy before system design, which pulls everything together;
+# launches last, because shipping is the final step.
 CHAPTERS = [
     ch1_prompt_rag_ft.CHAPTER,
     ch2_grounding.CHAPTER,
     ch3_evals.CHAPTER,
     ch4_latency_cost.CHAPTER,
     ch5_agents.CHAPTER,
+    ch7_ml_literacy.CHAPTER,
     ch6_system_design.CHAPTER,
+    ch8_launch_rai.CHAPTER,
 ]
 
-COMING_SOON = [
-    "Classic ML literacy",
-    "Launches and responsible AI",
-]
+COMING_SOON: list[str] = []
 
 
 def render_learn(rag) -> None:
@@ -62,8 +63,9 @@ def render_learn(rag) -> None:
         st.caption(f"🔢 Model calls made in labs this session: **{calls_used()}**")
         st.caption("Free models allow roughly 20 calls/min. Each lab shows its call count before you run it.")
 
-        with st.expander("Coming later"):
-            st.markdown("\n".join(f"- {t}" for t in COMING_SOON))
+        if COMING_SOON:
+            with st.expander("Coming later"):
+                st.markdown("\n".join(f"- {t}" for t in COMING_SOON))
 
     with body:
         st.subheader(chapter["title"])

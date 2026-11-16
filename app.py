@@ -13,6 +13,7 @@
 import os
 import time
 import tempfile
+import uuid
 from pathlib import Path
 
 import pandas as pd
@@ -120,7 +121,11 @@ def init_state():
         st.session_state.chunk_overlap = 60
 
     if "rag" not in st.session_state:
+        # ChromaDB's in-memory client is shared by the whole process, so each
+        # browser session gets its own collection (otherwise tabs see each
+        # other's chunks while their document lists differ).
         st.session_state.rag = RAGEngine(
+            collection_name=f"rag_{uuid.uuid4().hex[:12]}",
             embedding_model=st.session_state.embed_model,
             similarity=st.session_state.similarity,
             chunk_size=st.session_state.chunk_size,

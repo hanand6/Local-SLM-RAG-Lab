@@ -34,6 +34,9 @@ rank_bm25>=0.2.2
 # Sentence embeddings (all-MiniLM-L6-v2)
 sentence-transformers>=2.7.0
 
+# Classic ML baseline in the Learn tab (TF-IDF + logistic regression)
+scikit-learn>=1.3.0
+
 # RAGAS evaluation
 ragas>=0.2.0
 langchain-google-genai>=2.0.0
