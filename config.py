@@ -230,6 +230,15 @@ RAGAS_TIMEOUT_S = 180
 RAGAS_MAX_RETRIES = 6
 RAGAS_MAX_WAIT_S = 60
 
+# ── Persistence ──────────────────────────────────────────────
+# Keep the document index and Learn progress on disk so they survive
+# restarts. Stored under data/ (gitignored). Set PERSIST_INDEX=false in
+# .env for a throwaway in-memory index.
+_DATA_DIR = os.path.join(os.path.dirname(__file__), "data")
+PERSIST_INDEX = os.getenv("PERSIST_INDEX", "true").strip().lower() not in ("0", "false", "no")
+INDEX_DIR = os.path.join(_DATA_DIR, "chroma_db")
+LEARN_PROGRESS_FILE = os.path.join(_DATA_DIR, "learn_progress.json")
+
 # ── Indexing ─────────────────────────────────────────────────
 # ChromaDB rejects inserts above ~5,461 items, so large documents are
 # embedded and stored in batches of this size.

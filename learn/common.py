@@ -16,6 +16,7 @@ import streamlit as st
 
 from benchmarker import BenchmarkResult
 from config import MODELS
+from learn import progress
 
 
 # ── Model calls ──────────────────────────────────────────────
@@ -101,9 +102,13 @@ def interview_card(question: str, asked_by: str, structure: list[str], sample: s
     with st.container(border=True):
         st.markdown(f"#### 🎤 “{question}”")
         st.caption(f"Typical of: {asked_by}")
+        key = f"draft_{zlib.crc32(question.encode())}"
         st.text_area(
             "Your answer (draft it before revealing — say it out loud in 2 minutes)",
-            key=f"draft_{zlib.crc32(question.encode())}", height=110,
+            value=progress.drafts().get(key, ""),
+            key=progress.widget_key(key), height=110,
+            on_change=progress.on_draft_change, args=(key,),
+            help="Saved automatically when you click outside the box.",
         )
         with st.expander("Reveal: a strong answer"):
             st.markdown("**Structure**")

@@ -11,7 +11,9 @@
 #   - chunk_size / chunk_overlap : updated via set_chunker_params()
 # ============================================================
 
+import json
 import os
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -153,21 +155,68 @@ class RAGEngine:
         similarity: str = "cosine",         # "cosine" | "l2"
         chunk_size: int = CHUNK_SIZE,
         chunk_overlap: int = CHUNK_OVERLAP,
+        persist_dir: str | None = None,
     ):
+        """
+        persist_dir: if set, the index is stored on disk there and survives
+        restarts. Each (embedding model, similarity) pair gets its own
+        collection, so switching models never mixes vector spaces and
+        switching back finds the old index again. If None, the index lives
+        in memory only.
+        """
         self.embedding_model = embedding_model
         self.similarity = similarity
-        self._collection_name = collection_name
+        self._base_name = collection_name
+        self._persist_dir = Path(persist_dir) if persist_dir else None
+        self._collection_name = self._name_for(embedding_model, similarity)
 
         self.embed_client = EmbeddingClient(embedding_model)
         self.reranker     = BM25Reranker()
         self.benchmarker  = Benchmarker()
         self.chunker      = TextChunker(chunk_size, chunk_overlap)
 
-        self._chroma = chromadb.Client(
-            Settings(anonymized_telemetry=False)
-        )
-        self._collection = self._make_collection(collection_name, similarity)
-        self._indexed_docs: list[dict] = []
+        if self._persist_dir:
+            self._persist_dir.mkdir(parents=True, exist_ok=True)
+            self._chroma = chromadb.PersistentClient(
+                path=str(self._persist_dir),
+                settings=Settings(anonymized_telemetry=False),
+            )
+        else:
+            self._chroma = chromadb.Client(Settings(anonymized_telemetry=False))
+        self._collection = self._make_collection(self._collection_name, similarity)
+        self._indexed_docs: list[dict] = self._load_docs()
+
+    # ── Persistence helpers ──────────────────────────────────
+
+    @property
+    def persistent(self) -> bool:
+        return self._persist_dir is not None
+
+    def _name_for(self, embedding_model: str, similarity: str) -> str:
+        if not getattr(self, "_persist_dir", None):
+            return self._base_name
+        slug = re.sub(r"[^a-zA-Z0-9_-]+", "-", embedding_model).strip("-").lower()
+        return f"{self._base_name}-{slug}-{similarity}"[:60]
+
+    def _docs_file(self) -> Path | None:
+        return self._persist_dir / f"{self._collection_name}.docs.json" if self._persist_dir else None
+
+    def _load_docs(self) -> list[dict]:
+        f = self._docs_file()
+        if f and f.exists():
+            try:
+                docs = json.loads(f.read_text(encoding="utf-8"))
+                # Drop entries whose chunks are no longer in the store.
+                return [d for d in docs if self._collection.get(
+                    where={"source": d.get("source", d["doc_name"])}, limit=1)["ids"]]
+            except (json.JSONDecodeError, KeyError, ValueError):
+                return []
+        return []
+
+    def _save_docs(self) -> None:
+        f = self._docs_file()
+        if f:
+            f.write_text(json.dumps(self._indexed_docs, indent=2), encoding="utf-8")
 
     # ── Configuration ────────────────────────────────────────
 
@@ -183,7 +232,8 @@ class RAGEngine:
     ) -> bool:
         """
         Change embedding model or similarity metric.
-        ⚠️  ALWAYS resets the index (different vector space).
+        In memory: resets the index (different vector space).
+        Persistent: switches to that model's own saved index.
         Returns True if a change was made.
         """
         changed = (
@@ -196,7 +246,13 @@ class RAGEngine:
         self.embedding_model = embedding_model
         self.similarity      = similarity
         self.embed_client    = EmbeddingClient(embedding_model)
-        self.reset()          # wipe index — incompatible embeddings
+        if self.persistent:
+            # Switch to (or create) the index for this model + metric.
+            self._collection_name = self._name_for(embedding_model, similarity)
+            self._collection = self._make_collection(self._collection_name, similarity)
+            self._indexed_docs = self._load_docs()
+        else:
+            self.reset()      # wipe index — incompatible embeddings
         return True
 
     def _make_collection(self, name: str, similarity: str):
@@ -231,6 +287,9 @@ class RAGEngine:
         # 1. Load
         raw_text = load_document(file_path)
 
+        # Re-indexing the same file replaces its old chunks.
+        self.remove_document(doc_name, save=False)
+
         # 2. Chunk
         chunks = self.chunker.split(raw_text)
         total = len(chunks)
@@ -257,9 +316,23 @@ class RAGEngine:
             "index_time_s":  round(elapsed, 2),
             "embedding_model": self.embedding_model,
             "similarity":    self.similarity,
+            "source":        doc_name,       # name stored on the chunks
+            "indexed_at":    time.strftime("%Y-%m-%d %H:%M"),
         }
         self._indexed_docs.append(stats)
+        self._save_docs()
         return stats
+
+    def remove_document(self, source: str, save: bool = True) -> bool:
+        """Delete one document's chunks. Returns True if anything was removed."""
+        existing = self._collection.get(where={"source": source}, limit=1)["ids"]
+        if existing:
+            self._collection.delete(where={"source": source})
+        before = len(self._indexed_docs)
+        self._indexed_docs = [d for d in self._indexed_docs if d.get("source", d["doc_name"]) != source]
+        if save:
+            self._save_docs()
+        return bool(existing) or len(self._indexed_docs) != before
 
     def index_text(self, text: str, doc_name: str = "pasted_text") -> dict:
         """Index raw text directly (for paste-in content)."""
@@ -270,7 +343,8 @@ class RAGEngine:
             path = Path(tmp_dir) / f"{safe}.txt"
             path.write_text(text, encoding="utf-8")
             result = self.index_file(str(path))
-        result["doc_name"] = doc_name
+        result["doc_name"] = doc_name      # display name; chunks keep result["source"]
+        self._save_docs()
         return result
 
     # ── Retrieval ────────────────────────────────────────────
@@ -412,7 +486,7 @@ class RAGEngine:
             #     MODELS dict key ('google/gemini-2.5-flash') — the API rejects the prefix.
             from config import GEMINI_MODEL
             client = GeminiApiClient(api_key=GEMINI_API_KEY, model=GEMINI_MODEL)
-            return client.generate(prompt, system=system, run_index=run_index)
+            return client.generate(prompt, system=system, run_index=run_index, on_token=on_token)
 
         else:
             result = BenchmarkResult(model=model, run_index=run_index, prompt_preview=prompt[:120])
@@ -590,3 +664,4 @@ class RAGEngine:
         self._chroma.delete_collection(self._collection_name)
         self._collection = self._make_collection(self._collection_name, self.similarity)
         self._indexed_docs.clear()
+        self._save_docs()

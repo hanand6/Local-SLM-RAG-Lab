@@ -15,6 +15,8 @@ from learn import (
     ch4_latency_cost, ch5_agents, ch6_system_design,
     ch7_ml_literacy, ch8_launch_rai,
 )
+from config import PERSIST_INDEX
+from learn import progress
 from learn.common import calls_used
 
 # Learning order (not the order topics appear in interview prep lists):
@@ -36,6 +38,7 @@ COMING_SOON: list[str] = []
 
 
 def render_learn(rag) -> None:
+    progress.load_once()          # restore saved progress + drafts (first render)
     done: set = st.session_state.setdefault("learn_done", set())
 
     st.header("🎓 Learn")
@@ -63,6 +66,16 @@ def render_learn(rag) -> None:
         st.caption(f"🔢 Model calls made in labs this session: **{calls_used()}**")
         st.caption("Free models allow roughly 20 calls/min. Each lab shows its call count before you run it.")
 
+        with st.expander("Saved progress"):
+            st.caption(
+                "Completed chapters and interview drafts are saved to "
+                "`data/learn_progress.json` and survive restarts. Lab results are not saved."
+                if PERSIST_INDEX else "Saving is off (PERSIST_INDEX=false): progress resets on restart."
+            )
+            if st.checkbox("I want to start over", key="learn_reset_confirm"):
+                # on_click runs before the next render, so it may reset widget state.
+                st.button("Reset progress and drafts", key="learn_reset", on_click=progress.reset)
+
         if COMING_SOON:
             with st.expander("Coming later"):
                 st.markdown("\n".join(f"- {t}" for t in COMING_SOON))
@@ -84,7 +97,9 @@ def render_learn(rag) -> None:
         if st.checkbox("Mark this chapter complete", value=is_done, key=f"done_{chapter['id']}"):
             if not is_done:
                 done.add(chapter["id"])
+                progress.save()
                 st.rerun()
         elif is_done:
             done.discard(chapter["id"])
+            progress.save()
             st.rerun()

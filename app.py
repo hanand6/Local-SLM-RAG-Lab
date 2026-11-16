@@ -10,6 +10,7 @@
 #   6. Tradeoff Report    — Quality vs Speed vs Cost analysis
 # ============================================================
 
+import html
 import os
 import time
 import tempfile
@@ -23,10 +24,11 @@ import streamlit as st
 
 from config import (
     MODELS, BENCHMARK_PROMPTS, OLLAMA_BASE_URL, NVIDIA_API_KEY, GEMINI_API_KEY,
-    OPENROUTER_API_KEY, EMBEDDING_MODEL,
+    OPENROUTER_API_KEY, EMBEDDING_MODEL, PERSIST_INDEX, INDEX_DIR,
 )
 from api_client import list_openrouter_free_models
 from learn.ui import render_learn
+from learn.common import html_safe
 from embedder import EMBEDDING_OPTIONS
 from ollama_client import OllamaClient
 from rag_engine import RAGEngine
@@ -121,11 +123,13 @@ def init_state():
         st.session_state.chunk_overlap = 60
 
     if "rag" not in st.session_state:
-        # ChromaDB's in-memory client is shared by the whole process, so each
-        # browser session gets its own collection (otherwise tabs see each
-        # other's chunks while their document lists differ).
+        # Persistent (default): one saved workspace index on disk, shared by
+        # all browser tabs and kept across restarts.
+        # In-memory: ChromaDB's in-memory client is process-wide, so each
+        # browser session gets its own collection.
         st.session_state.rag = RAGEngine(
-            collection_name=f"rag_{uuid.uuid4().hex[:12]}",
+            collection_name="workspace" if PERSIST_INDEX else f"rag_{uuid.uuid4().hex[:12]}",
+            persist_dir=INDEX_DIR if PERSIST_INDEX else None,
             embedding_model=st.session_state.embed_model,
             similarity=st.session_state.similarity,
             chunk_size=st.session_state.chunk_size,
@@ -526,20 +530,24 @@ with tab2:
             or new_sim != rag.similarity
         )
         if needs_reset:
-            st.warning(
-                "⚠️ Changing embedding model or similarity metric requires "
-                "**resetting the index** (different vector space). "
-                "All indexed documents will be cleared.",
-            )
-            if st.button("🔄 Apply & Reset Index", type="primary", key="apply_embed"):
+            if rag.persistent:
+                st.info(
+                    "Each embedding model and similarity metric has its **own saved index** "
+                    "(different vector spaces can't be mixed). Switching shows that model's "
+                    "documents; your current index stays saved and comes back if you switch back.",
+                )
+            else:
+                st.warning(
+                    "⚠️ Changing embedding model or similarity metric requires "
+                    "**resetting the index** (different vector space). "
+                    "All indexed documents will be cleared.",
+                )
+            label = "🔄 Switch index" if rag.persistent else "🔄 Apply & Reset Index"
+            if st.button(label, type="primary", key="apply_embed"):
                 changed = rag.reconfigure_embedder(new_embed, new_sim)
                 if changed:
                     st.session_state.embed_model = new_embed
                     st.session_state.similarity  = new_sim
-                    st.success(
-                        f"✅ Switched to **{EMBEDDING_OPTIONS[new_embed]['label']}** · "
-                        f"**{sim_labels[new_sim]}**. Index cleared."
-                    )
                     st.rerun()
 
         st.divider()
@@ -569,21 +577,32 @@ with tab2:
         st.subheader("Index Status")
         st.metric("Total chunks", rag.chunk_count)
         st.metric("Documents", len(rag.indexed_docs))
+        st.caption(
+            "💾 Saved on disk: kept when you restart the app." if rag.persistent
+            else "In memory only: cleared when the app restarts."
+        )
 
         if rag.indexed_docs:
             st.write("**Indexed files:**")
-            for doc in rag.indexed_docs:
-                st.markdown(f"""
+            for i, doc in enumerate(rag.indexed_docs):
+                d1, d2 = st.columns([5, 1])
+                with d1:
+                    st.markdown(f"""
 <div class="chunk-box">
-  📄 <b>{doc['doc_name']}</b><br>
+  📄 <b>{html.escape(doc['doc_name'])}</b><br>
   {doc['chunks']} chunks · {doc['avg_chunk_len']} avg chars · {doc['index_time_s']}s
+  {('· ' + doc['indexed_at']) if doc.get('indexed_at') else ''}
 </div>
-                """, unsafe_allow_html=True)
+                    """, unsafe_allow_html=True)
+                with d2:
+                    if st.button("✕", key=f"rm_doc_{i}", help=f"Remove {doc['doc_name']} from the index"):
+                        rag.remove_document(doc.get("source", doc["doc_name"]))
+                        st.rerun()
 
         st.divider()
-        if st.button("🗑️ Clear Index", type="secondary", use_container_width=True):
+        if st.button("🗑️ Clear Index", type="secondary", use_container_width=True,
+                     help="Removes every document from this index (also from disk)."):
             rag.reset()
-            st.success("Index cleared — ready for a new document.")
             st.rerun()
 
         st.divider()
@@ -671,7 +690,7 @@ with tab3:
                     st.markdown("#### 🔍 Vector Search")
                     st.caption("Chunks ordered by embedding similarity")
                     st.markdown(
-                        f'<div class="answer-box">{vec_result["answer"]}</div>',
+                        f'<div class="answer-box">{html_safe(vec_result["answer"])}</div>',
                         unsafe_allow_html=True
                     )
                     st.caption(
@@ -683,7 +702,7 @@ with tab3:
                         for i, c in enumerate(vec_result["context_chunks"]):
                             st.markdown(
                                 f'<div class="chunk-box"><b>#{i+1}</b> · {c["source"]} · '
-                                f'Sim: {round(c["similarity"]*100)}%<br><br>{c["text"][:350]}...</div>',
+                                f'Sim: {round(c["similarity"]*100)}%<br><br>{html_safe(c["text"][:350])}...</div>',
                                 unsafe_allow_html=True
                             )
 
@@ -691,7 +710,7 @@ with tab3:
                     st.markdown("#### 📊 BM25 Reranked")
                     st.caption("Chunks reordered by keyword relevance (BM25)")
                     st.markdown(
-                        f'<div class="answer-box">{bm25_result["answer"]}</div>',
+                        f'<div class="answer-box">{html_safe(bm25_result["answer"])}</div>',
                         unsafe_allow_html=True
                     )
                     st.caption(
@@ -705,7 +724,7 @@ with tab3:
                             bm25_score = c.get("bm25_score", 0)
                             st.markdown(
                                 f'<div class="chunk-box"><b>BM25 #{i+1}</b> (was vector #{vec_rank}) · '
-                                f'{c["source"]} · BM25: {bm25_score:.3f}<br><br>{c["text"][:350]}...</div>',
+                                f'{c["source"]} · BM25: {bm25_score:.3f}<br><br>{html_safe(c["text"][:350])}...</div>',
                                 unsafe_allow_html=True
                             )
 
@@ -717,7 +736,7 @@ with tab3:
                 # Answer
                 st.subheader("Answer")
                 st.markdown(
-                    f'<div class="answer-box">{result["answer"]}</div>',
+                    f'<div class="answer-box">{html_safe(result["answer"])}</div>',
                     unsafe_allow_html=True
                 )
 
@@ -737,7 +756,7 @@ with tab3:
                         st.markdown(
                             f'<div class="chunk-box">'
                             f'<b>Chunk {i+1}</b> · Source: {chunk["source"]} · '
-                            f'Similarity: {sim_pct}%<br><br>{chunk["text"][:400]}...'
+                            f'Similarity: {sim_pct}%<br><br>{html_safe(chunk["text"][:400])}...'
                             f'</div>',
                             unsafe_allow_html=True
                         )
@@ -829,7 +848,7 @@ with tab4:
                         unsafe_allow_html=True
                     )
                     st.markdown(
-                        f'<div class="answer-box">{r["answer"]}</div>',
+                        f'<div class="answer-box">{html_safe(r["answer"])}</div>',
                         unsafe_allow_html=True
                     )
                     st.caption(
@@ -1295,7 +1314,7 @@ with tab7:
             # Display the generated answer
             st.markdown("**Generated answer:**")
             st.markdown(
-                f'<div class="answer-box">{answer}</div>',
+                f'<div class="answer-box">{html_safe(answer)}</div>',
                 unsafe_allow_html=True
             )
 

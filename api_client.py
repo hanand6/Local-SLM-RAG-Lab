@@ -3,7 +3,7 @@
 #
 # Supports:
 #   - NVIDIA NIM (Kimi K2 Instruct, OpenAI-compatible)
-#   - Google Gemini (via google-generativeai SDK)
+#   - Google Gemini (via the google-genai SDK)
 #
 # Returns BenchmarkResult objects so cloud models slot into
 # the same benchmark/compare pipeline as local Ollama models.
@@ -301,31 +301,31 @@ def list_openrouter_free_models(timeout: float = 10.0) -> list[dict]:
 
 class GeminiApiClient:
     """
-    Wraps Google Gemini API via google-generativeai SDK.
+    Wraps the Google Gemini API via the google-genai SDK
+    (replaces the deprecated google-generativeai package).
     Returns BenchmarkResult for unified benchmarking.
     """
 
     def __init__(self, api_key: str, model: str):
         try:
-            import google.generativeai as genai
+            from google import genai
+            from google.genai import types
         except ImportError:
-            raise ImportError(
-                "Install google-generativeai: pip install google-generativeai"
-            )
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
+            raise ImportError("Install google-genai: pip install google-genai")
         self.model_name = model
-        self._genai = genai
+        self._client = genai.Client(api_key=api_key)
+        self._types = types
 
     def generate(
         self,
         prompt: str,
         system: str = "",
         temperature: float = 0.1,
-        max_tokens: int = 1024,
+        max_tokens: int = API_MAX_OUTPUT_TOKENS,
         run_index: int = 0,
+        on_token=None,
     ) -> BenchmarkResult:
-        """Call Gemini API and return a BenchmarkResult with timing."""
+        """Call Gemini (streaming) and return a BenchmarkResult with timing."""
         result = BenchmarkResult(
             model=self.model_name,
             run_index=run_index,
@@ -333,31 +333,31 @@ class GeminiApiClient:
         )
 
         try:
-            generation_config = self._genai.GenerationConfig(
+            config = self._types.GenerateContentConfig(
                 temperature=temperature,
-                max_output_tokens=max_tokens,
+                max_output_tokens=max_tokens,   # includes "thinking" tokens on 2.5 models
+                system_instruction=system or None,
             )
-
-            # System instruction support (Gemini 1.5+ / 2.0+)
-            model_kwargs = {"generation_config": generation_config}
-            if system:
-                model_kwargs["system_instruction"] = system
-
-            model = self._genai.GenerativeModel(self.model_name, **model_kwargs)
 
             wall_start = time.perf_counter()
             first_token_time: Optional[float] = None
             collected_text = []
+            usage = None
 
-            response = model.generate_content(prompt, stream=True)
-            for chunk in response:
-                if chunk.text:
+            for chunk in self._client.models.generate_content_stream(
+                model=self.model_name, contents=prompt, config=config,
+            ):
+                if getattr(chunk, "usage_metadata", None):
+                    usage = chunk.usage_metadata
+                text = getattr(chunk, "text", None)
+                if text:
                     if first_token_time is None:
                         first_token_time = time.perf_counter()
-                    collected_text.append(chunk.text)
+                    collected_text.append(text)
+                    if on_token:
+                        on_token("".join(collected_text))
 
-            wall_end = time.perf_counter()
-            wall_s = wall_end - wall_start
+            wall_s = time.perf_counter() - wall_start
 
             result.response = "".join(collected_text)
             result.wall_clock_s = wall_s
@@ -366,13 +366,25 @@ class GeminiApiClient:
                 (first_token_time - wall_start) * 1000
                 if first_token_time else wall_s * 1000
             )
+            result.time_to_answer_ms = result.ttft_ms
             result.eval_duration_ms = result.total_duration_ms - result.ttft_ms
-            result.output_tokens = max(1, len(result.response) // 4)
-            result.prompt_tokens = max(1, len(prompt) // 4)
+
+            # Exact token counts from usage metadata when available.
+            thoughts = getattr(usage, "thoughts_token_count", None) or 0 if usage else 0
+            out_tok = getattr(usage, "candidates_token_count", None) if usage else None
+            in_tok = getattr(usage, "prompt_token_count", None) if usage else None
+            result.reasoning_tokens = thoughts
+            result.output_tokens = (out_tok + thoughts) if out_tok else max(1, len(result.response) // 4)
+            result.prompt_tokens = in_tok or max(1, len(prompt) // 4)
 
             if result.eval_duration_ms > 0 and result.output_tokens > 0:
                 result.tokens_per_second = result.output_tokens / (
                     result.eval_duration_ms / 1000
+                )
+            if not result.response.strip():
+                result.error = (
+                    f"Empty answer from Gemini '{self.model_name}'"
+                    + (f" ({thoughts} tokens spent thinking)." if thoughts else ".")
                 )
 
         except Exception as e:

@@ -116,7 +116,18 @@ Use non-sensitive documents: retrieved chunks are sent to the free cloud models.
 - **Models:** labs offer only the models ticked in the sidebar. Flint v1.0 and Nemotron 3.5 Lightning are fast and reliable defaults. Gemma 4 26B is often rate-limited.
 - **Rate limits:** free models allow roughly 20 calls a minute. The call counter on the left of the Learn tab tracks your session. If you hit a limit, wait a minute; calls are retried automatically.
 - **Good questions for the sample report:** *"What does the board recommend for 2026?"* (answerable), *"What was revenue in 1995?"* (unanswerable, good for chapter 2: it still scores about 0.41 similarity, so raise the abstain threshold to 0.45 to see the gate refuse it), *"How much did logistics costs grow?"* (a number, good for chapter 3's golden set).
-- **Progress and lab results** are kept for the browser session only. A page refresh or app restart clears them, along with the index, so re-index after restarting.
+- **What's saved:** completed chapters, interview drafts (saved when you click outside the box) and your indexed documents all survive refreshes and restarts. Lab results are not saved; just re-run them. To start over, use **Saved progress → Reset** in the Learn tab, or **🗑️ Clear Index** on the Upload tab.
+
+---
+
+## What's saved between restarts
+
+| Saved | Where | Clear it with |
+|---|---|---|
+| Indexed documents (chunks + embeddings) | `data/chroma_db/` | **🗑️ Clear Index** or **✕** next to a document (Upload tab) |
+| Learn progress + interview drafts | `data/learn_progress.json` | **Saved progress → Reset** (Learn tab) |
+
+`data/` is gitignored, so none of this is pushed to GitHub. Each embedding model and similarity metric keeps its own index: switching models never mixes vector spaces, and switching back brings the old index back. All browser tabs share the same saved workspace. For a throwaway, in-memory setup, add `PERSIST_INDEX=false` to `.env`.
 
 ---
 
@@ -160,7 +171,7 @@ Rate limits don't depend on document size. Indexing is fully local (embeddings o
 
 - The size that matters is the **text**, not the file. A 30 MB PDF full of images may hold only 1–2 MB of text.
 - Indexing runs in batches with a progress bar. The upload limit is Streamlit's default 200 MB.
-- The index is in memory, so it is cleared when the app restarts.
+- The index is saved on disk (`data/chroma_db/`), so you only index a document once. Re-indexing a file with the same name replaces it.
 - RAG answers questions from a few chunks. It can't "summarize the whole document" for large files.
 
 ---
